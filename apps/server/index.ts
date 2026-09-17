@@ -5,6 +5,8 @@ import { loadConfig } from "./config.ts";
 export { buildApp } from "./app.ts";
 export { loadConfig, validateConfig } from "./config.ts";
 export type { ServerConfig } from "./config.ts";
+export type { AppDependencies } from "./app.ts";
+export type { PrivateExportStore, RunExport } from "./exports.ts";
 
 export async function main(): Promise<void> {
   const config = loadConfig();
@@ -14,7 +16,12 @@ export async function main(): Promise<void> {
   };
   process.once("SIGINT", shutdown);
   process.once("SIGTERM", shutdown);
-  await app.listen({ host: config.host, port: config.port });
+  try {
+    await app.listen({ host: config.host, port: config.port });
+  } catch (error) {
+    await app.close();
+    throw error;
+  }
   console.info("voice-action-lab server listening");
 }
 

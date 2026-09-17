@@ -4,12 +4,18 @@ param location string = resourceGroup().location
 param appName string = 'voice-action-lab'
 param environmentName string = 'voice-action-lab-secure-env'
 param registryName string
+param storageAccountName string
 param vaultName string
 param foundryEndpoint string
 param authClientId string
 param ownerObjectId string
+@description('Optional additional OAuth client ID for owner-authenticated API testing. The owner principal allowlist remains required.')
+param additionalAuthClientId string = ''
 param tenantId string = subscription().tenantId
 param externalIngress bool = false
+@minValue(100)
+@maxValue(5000)
+param stepIntervalMs int = 3000
 @minLength(64)
 @maxLength(64)
 param imageDigest string
@@ -67,6 +73,8 @@ resource app 'Microsoft.App/containerApps@2025-01-01' = {
           { name: 'NODE_ENV', value: 'production' }
           { name: 'HOST', value: '0.0.0.0' }
           { name: 'PORT', value: '3000' }
+          { name: 'MAINTENANCE_PORT', value: '3001' }
+          { name: 'CLOSE_TIMEOUT_MS', value: '8000' }
           { name: 'AUTH_MODE', value: 'easyauth' }
           { name: 'TRUST_EASYAUTH_PROXY', value: 'true' }
           { name: 'ALLOWED_TENANT_ID', value: tenantId }
@@ -78,8 +86,10 @@ resource app 'Microsoft.App/containerApps@2025-01-01' = {
           { name: 'AZURE_BACKEND_MODEL', value: 'gpt-5.5' }
           { name: 'AZURE_CREDENTIAL_MODE', value: 'managed-identity' }
           { name: 'AZURE_CLIENT_ID', value: runtime.properties.clientId }
+          { name: 'AZURE_STORAGE_ACCOUNT_NAME', value: storageAccountName }
+          { name: 'AZURE_STORAGE_CONTAINER', value: 'experiments' }
           { name: 'STATIC_DIRECTORY', value: '/app/apps/web/dist' }
-          { name: 'STEP_INTERVAL_MS', value: '1000' }
+          { name: 'STEP_INTERVAL_MS', value: string(stepIntervalMs) }
         ]
         probes: [
           { type: 'Startup', tcpSocket: { port: 3000 }, periodSeconds: 2, failureThreshold: 60 }
@@ -113,6 +123,7 @@ resource auth 'Microsoft.App/containerApps/authConfigs@2025-01-01' = {
         validation: {
           allowedAudiences: [authClientId, 'api://${authClientId}']
           defaultAuthorizationPolicy: {
+            allowedApplications: empty(additionalAuthClientId) ? [authClientId] : [authClientId, additionalAuthClientId]
             allowedPrincipals: { identities: [ownerObjectId] }
           }
         }

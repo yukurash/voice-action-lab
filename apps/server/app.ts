@@ -14,11 +14,20 @@ import type { ServerConfig } from "./config.ts";
 import { AzureLiveGateway, GatewayError } from "./gateway.ts";
 import type { CloseResult, LiveConnection, LiveGateway } from "./gateway.ts";
 import { completedTool, serviceId } from "./protocol.ts";
+import { createCredential } from "./credentials.ts";
+import { AzureBlobExportStore } from "./export-store.ts";
+import { buildRunExport, exportRunId, parseRunExport } from "./exports.ts";
+import type { PrivateExportStore } from "./exports.ts";
+import { MaintenanceGate, MaintenanceDrainingError, startMaintenanceListener } from "../../packages/deployment/index.ts";
+import type { MaintenanceListener } from "../../packages/deployment/index.ts";
 
 export interface AppDependencies {
   gateway?: LiveGateway;
   now?: () => number;
   newId?: () => string;
+  exportStore?: PrivateExportStore;
+  maintenanceGate?: MaintenanceGate;
+  startMaintenance?: typeof startMaintenanceListener;
 }
 
 interface Run {
@@ -53,8 +62,14 @@ export async function buildApp(config: ServerConfig, dependencies: AppDependenci
   const monotonicOrigin = performance.now();
   const now = dependencies.now ?? (() => wallOrigin + performance.now() - monotonicOrigin);
   const newId = dependencies.newId ?? randomUUID;
-  const gateway = dependencies.gateway ?? new AzureLiveGateway(config, { now });
+  const credential = createCredential(config);
+  const gateway = dependencies.gateway ?? new AzureLiveGateway(config, { now, credential });
+  const exportStore = config.exportStorage
+    ? dependencies.exportStore ?? new AzureBlobExportStore(config.exportStorage, credential)
+    : null;
   const app = Fastify({ logger: false, bodyLimit: 80_000, trustProxy: false });
+  const maintenanceGate = dependencies.maintenanceGate ?? new MaintenanceGate();
+  let maintenance: MaintenanceListener | null = null;
   const owners = new WeakMap<FastifyRequest, string>();
   const sockets = new Map<WebSocket, string>();
   let run: Run | null = null;
@@ -73,6 +88,7 @@ export async function buildApp(config: ServerConfig, dependencies: AppDependenci
   let serverClosing = false;
   let rateWindowAt = now();
   let mutationCount = 0;
+  let closedRun: { runId: string; closedAt: string } | null = null;
 
   function record(current: Run, kind: string, details: LabEvent["details"] = {}): void {
     if (run !== current) return;
@@ -162,6 +178,7 @@ export async function buildApp(config: ServerConfig, dependencies: AppDependenci
       } else {
         status = { ...status, transport: "disconnected", expiresAt: null, message: `Simulation stopped: ${reason}.` };
       }
+      closedRun = { runId: current.engine.snapshot().runId, closedAt: new Date(now()).toISOString() };
       run = null;
       publish();
     });
@@ -294,6 +311,7 @@ export async function buildApp(config: ServerConfig, dependencies: AppDependenci
   }
 
   function begin(ownerId: string, mode: ExperimentMode, kind: Run["kind"]): Run {
+    maintenanceGate.assertAccepting();
     if (run) throw new HttpError(409, "session_already_active");
     const startedAt = now();
     engine = new GameEngine({
@@ -310,6 +328,7 @@ export async function buildApp(config: ServerConfig, dependencies: AppDependenci
       backendPending: new Set(), completedResponses: new Set(), pendingEvents: [],
     };
     run = current;
+    closedRun = null;
     stateOwner = ownerId;
     status = {
       transport: kind === "live" ? "connecting" : "connected", source: "simulation", recording: false,
@@ -325,6 +344,7 @@ export async function buildApp(config: ServerConfig, dependencies: AppDependenci
   }
 
   app.setErrorHandler((error, _request, reply) => {
+    if (error instanceof MaintenanceDrainingError) return reply.code(503).send({ error: "deployment_in_progress" });
     if (error instanceof HttpError) return reply.code(error.statusCode).send({ error: error.message });
     if (error instanceof GatewayError) return reply.code(error.status).send({ error: error.message });
     const statusCode = object(error)?.statusCode;
@@ -352,8 +372,9 @@ export async function buildApp(config: ServerConfig, dependencies: AppDependenci
   await app.register(websocket, { options: { maxPayload: 4_096 } });
   app.get("/health/live", async () => ({ status: "ok" }));
   app.get("/api/config", async () => ({
-    liveAvailable: config.liveEnabled,
-    reason: config.liveEnabled ? "Live configured; account and session connection are verified on connect." : "Live is disabled by server configuration.",
+    liveAvailable: config.liveEnabled && !maintenanceGate.isDraining,
+    reason: maintenanceGate.isDraining ? "Deployment in progress. New sessions are temporarily blocked."
+      : config.liveEnabled ? "Live configured; account and session connection are verified on connect." : "Live is disabled by server configuration.",
   }));
   app.get("/api/state", async (request) => { ensureOwner(request); return state(); });
   app.get("/api/events", { websocket: true, preValidation: async (request) => { ensureOwner(request); } }, (socket, request) => {
@@ -374,7 +395,6 @@ export async function buildApp(config: ServerConfig, dependencies: AppDependenci
     const id = ownerForStart(request);
     const body = exactBody(request.body, ["mode"]);
     const mode = modeFrom(body.mode);
-    if (run) throw new HttpError(409, "session_already_active");
     begin(id, mode, "simulation");
     return state();
   });
@@ -489,8 +509,36 @@ export async function buildApp(config: ServerConfig, dependencies: AppDependenci
     return state();
   });
 
+  app.post("/api/exports", async (request, reply) => {
+    const requester = ensureOwner(request);
+    exactBody(request.body, []);
+    if (!exportStore) throw new HttpError(503, "export_not_configured");
+    if (run || !closedRun) throw new HttpError(409, "export_requires_closed_run");
+    const snapshot = state();
+    if (snapshot.game.runId !== closedRun.runId || !snapshot.game.stopped) throw new HttpError(409, "export_requires_closed_run");
+    const document = buildRunExport(snapshot, config, closedRun.closedAt, new Date(now()).toISOString());
+    await exportStore.create(document, requester);
+    return reply.code(201).send({ runId: document.runId, downloadPath: `/api/exports/${document.runId}` });
+  });
+  app.get<{ Params: { runId: string } }>("/api/exports/:runId", async (request, reply) => {
+    const requester = owner(request);
+    const runId = exportRunId(request.params.runId);
+    if (!exportStore) throw new HttpError(503, "export_not_configured");
+    const document = parseRunExport(await exportStore.read(runId, requester), runId);
+    reply.header("Content-Disposition", `attachment; filename="${runId}.json"`);
+    return reply.send(document);
+  });
+  app.delete<{ Params: { runId: string } }>("/api/exports/:runId", async (request) => {
+    const requester = owner(request);
+    const runId = exportRunId(request.params.runId);
+    exactBody(request.body === undefined ? {} : request.body, []);
+    if (!exportStore) throw new HttpError(503, "export_not_configured");
+    await exportStore.remove(runId, requester);
+    return { runId, deleted: true };
+  });
+
   if (config.staticDirectory) {
-    await app.register(fastifyStatic, { root: config.staticDirectory, wildcard: false, index: "index.html", dotfiles: "deny" });
+    await app.register(fastifyStatic, { root: config.staticDirectory, wildcard: true, index: "index.html", dotfiles: "deny" });
     app.setNotFoundHandler((request, reply) => {
       if ((request.method === "GET" || request.method === "HEAD") && !request.url.startsWith("/api/")
         && !request.url.startsWith("/health/") && !request.url.includes(".")) return reply.sendFile("index.html");
@@ -523,12 +571,21 @@ export async function buildApp(config: ServerConfig, dependencies: AppDependenci
     }
   }, config.tickMs);
   timer.unref();
+  app.addHook("onReady", async () => {
+    if (config.maintenancePort !== undefined) {
+      maintenance = await (dependencies.startMaintenance ?? startMaintenanceListener)({
+        gate: maintenanceGate, active: () => run !== null, port: config.maintenancePort,
+      });
+    }
+  });
   app.addHook("onClose", async () => {
+    maintenanceGate.beginDrain();
     serverClosing = true;
     clearInterval(timer);
     if (run) await closeRun(run, "server_shutdown");
     for (const socket of sockets.keys()) socket.terminate();
     sockets.clear();
+    await maintenance?.close();
   });
   return app;
 }

@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { setTimeout as delay } from "node:timers/promises";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
+import { mkdtemp, rmdir, unlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import test from "node:test";
 import type { TestContext } from "node:test";
 import WebSocket from "ws";
@@ -606,4 +608,25 @@ test("pending backend processing prevents idle closure until completion then sta
   clock += 600_001;
   await delay(40);
   assert.match((await app.inject("/api/state")).json().session.message, /session_time_limit/);
+});
+
+test("hashed assets built after registration are served without restarting the application", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "voice-action-static-test-"));
+  const index = join(directory, "index.html");
+  const asset = join(directory, "index-after-ready.js");
+  const created: string[] = [];
+  t.after(async () => {
+    for (const path of created) await unlink(path);
+    await rmdir(directory);
+  });
+  await writeFile(index, "<!doctype html><title>Static rebuild test</title>", { flag: "wx" });
+  created.push(index);
+  const { app } = await setup(t, config({ staticDirectory: directory }));
+  await writeFile(asset, "export const afterBuild = true;\n", { flag: "wx" });
+  created.push(asset);
+  await writeFile(index, '<!doctype html><script type="module" src="/index-after-ready.js"></script>');
+  assert.match((await app.inject("/")).body, /index-after-ready\.js/);
+  const response = await app.inject("/index-after-ready.js");
+  assert.equal(response.statusCode, 200);
+  assert.match(response.body, /afterBuild = true/);
 });

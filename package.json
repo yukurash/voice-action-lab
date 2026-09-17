@@ -22,6 +22,7 @@
     "verify": "npm run check:public && npm run typecheck && npm run lint && npm test && npm run build:web"
   },
   "devDependencies": {
+    "@azure/identity": "4.13.3",
     "@eslint/js": "10.0.1",
     "@playwright/test": "1.63.0",
     "@types/node": "24.13.4",
