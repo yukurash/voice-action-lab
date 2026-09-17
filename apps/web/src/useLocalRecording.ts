@@ -3,12 +3,11 @@ import { errorMessage } from "./api.ts";
 
 interface RecordingResources {
   recorder: MediaRecorder;
-  context: AudioContext;
   destination: MediaStreamAudioDestinationNode;
   sources: MediaStreamAudioSourceNode[];
 }
 
-export function useLocalRecording(mic: MediaStream | null, remote: MediaStream | null) {
+export function useLocalRecording(mic: MediaStream | null, remote: MediaStream | null, context: AudioContext | null) {
   const [recording, setRecording] = useState(false);
   const [finalizing, setFinalizing] = useState(false);
   const [download, setDownload] = useState<{ url: string; extension: string; bytes: number } | null>(null);
@@ -38,18 +37,14 @@ export function useLocalRecording(mic: MediaStream | null, remote: MediaStream |
   }, []);
 
   const start = useCallback(async () => {
-    if (!supported || !mic || !remote || !remote.getAudioTracks().length || current.current || starting.current) return;
+    if (!supported || !mic || !remote || !context || !remote.getAudioTracks().length || current.current || starting.current) return;
     starting.current = true;
     const token = ++version.current;
     setError(null);
-    let context: AudioContext | null = null;
     let destination: MediaStreamAudioDestinationNode | null = null;
     const sources: MediaStreamAudioSourceNode[] = [];
     try {
-      context = new AudioContext();
-      await context.resume();
       if (token !== version.current || !mounted.current) {
-        await context.close();
         return;
       }
       if (context.state !== "running") throw new Error("録音用の音声処理を開始できませんでした。");
@@ -64,7 +59,7 @@ export function useLocalRecording(mic: MediaStream | null, remote: MediaStream |
       const recorder = new MediaRecorder(destination.stream, mimeType ? { mimeType } : undefined);
       const chunks: Blob[] = [];
       let byteLength = 0;
-      const resource: RecordingResources = { recorder, context, destination, sources };
+      const resource: RecordingResources = { recorder, destination, sources };
       current.current = resource;
       recorder.ondataavailable = (event) => {
         if (event.data.size === 0) return;
@@ -82,10 +77,6 @@ export function useLocalRecording(mic: MediaStream | null, remote: MediaStream |
       recorder.onstop = () => {
         resource.sources.forEach((source) => source.disconnect());
         resource.destination.stream.getTracks().forEach((track) => track.stop());
-        void resource.context.close().catch((failure: unknown) => {
-          if (mounted.current) setError(`録音用の音声処理を終了できませんでした。${errorMessage(failure)}`);
-          else console.error("Voice Action Lab: recorder audio context cleanup failed.", failure);
-        });
         if (current.current === resource) current.current = null;
         if (!mounted.current) return;
         setRecording(false);
@@ -107,16 +98,11 @@ export function useLocalRecording(mic: MediaStream | null, remote: MediaStream |
       sources.forEach((source) => source.disconnect());
       destination?.stream.getTracks().forEach((track) => track.stop());
       current.current = null;
-      if (context && context.state !== "closed") {
-        try { await context.close(); } catch (cleanupFailure) {
-          console.error("Voice Action Lab: recorder startup cleanup failed.", cleanupFailure);
-        }
-      }
       if (mounted.current) setError(`録音を開始できませんでした。${errorMessage(failure)}`);
     } finally {
       starting.current = false;
     }
-  }, [mic, remote, stop, supported]);
+  }, [context, mic, remote, stop, supported]);
 
   useEffect(() => {
     if (!mic || !remote) stop();

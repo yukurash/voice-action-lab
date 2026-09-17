@@ -7,6 +7,7 @@ const channel = process.env.PLAYWRIGHT_CHANNEL;
 export default defineConfig({
   testDir: "./tests",
   fullyParallel: true,
+  workers: 1,
   reporter: "list",
   outputDir: process.env.PLAYWRIGHT_OUTPUT_DIR ?? join(tmpdir(), `voice-action-lab-web-tests-${process.pid}`),
   use: {
@@ -18,7 +19,9 @@ export default defineConfig({
     viewport: { width: 1440, height: 1000 },
   },
   webServer: {
-    command: "npm run dev -- --host localhost --port 5175",
+    command: process.env.PLAYWRIGHT_BUILT_CLIENT === "1"
+      ? "npm run preview -- --host localhost --port 5175"
+      : "npm run dev -- --host localhost --port 5175",
     url: "http://localhost:5175",
     reuseExistingServer: false,
   },

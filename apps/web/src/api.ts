@@ -96,6 +96,10 @@ export function isSessionAnswer(value: unknown): value is SessionAnswer {
     && typeof value.expiresAt === "string" && Number.isFinite(Date.parse(value.expiresAt));
 }
 
+export function isActivityResponse(value: unknown): value is { ok: true } {
+  return isRecord(value) && value.ok === true;
+}
+
 function isCommandResult(value: unknown): value is CommandResult {
   return isRecord(value)
     && typeof value.outcome === "string"
