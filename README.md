@@ -52,6 +52,109 @@ The output-path guard requires an absolute repository-external path and checks
 existing ancestors and symlinks. It does not create files or provide a filesystem
 concurrency lock. Actual run data must remain outside this checkout.
 
+## Running a private experiment
+
+The [runner](scripts/run-experiments.ts) and [analyzer](scripts/analyze-experiments.ts)
+extend those primitives with a fixed manifest, exclusive run lock, atomic result
+files, PCM evidence hashes, and resume without replaying started slots. They are
+operator tools, not public HTTP batch endpoints. CI uses synthetic evidence only.
+
+Before running:
+
+1. Use the approved Azure CLI owner login and explicit subscription, tenant and
+   app authentication client IDs. Never put an access token in arguments/files.
+2. Generate the fixed Japanese WAV fixtures with the
+   [fixture generator](scripts/generate-fixtures.ts), outside the repository.
+   Retain its manifest and verify hashes rather than substituting new recordings.
+3. Check out the exact source commit deployed to the owner-only app. Use the
+   [operator health proof](packages/deployment/README.md) to verify the immutable
+   image and source, and freeze automatic deployment for the entire experiment.
+   The runner checks `/api/experiment-config` before the batch, before each trial,
+   and after ready but before input. **The supplied image digest is an operator
+   assertion; the runner does not independently query ARM for it.**
+4. Choose a new absolute output directory outside the checkout. Keep all files
+   there, including failure evidence. On Windows the browser helper uses installed
+   Microsoft Edge; elsewhere it uses Playwright Chromium. `PLAYWRIGHT_CHANNEL`
+   may select another installed supported channel; do not change it mid-batch.
+
+The bearer-authenticated browser harness explicitly fetches the same-origin,
+hashed, self-contained worklet bundle through its authenticated page connection,
+then loads the unchanged bytes from a short-lived in-memory Blob URL. Direct
+worklet module requests can bypass Playwright's page-level extra headers. The
+bridge accepts only the measurement asset path, HTTP 200 and a JavaScript MIME
+type, with a five-second/256-KiB bound; it forbids redirects and external origins.
+It does not persist or embed a bearer token, alter server authentication, replace
+the PCM processor, or mock WebRTC/model traffic. Ordinary browser UI loading is
+unchanged. A CSP that forbids Blob worklets fails explicitly; the harness does not
+weaken it. Use the built client for these bearer-authenticated experiments.
+
+Example PowerShell arguments (replace every placeholder):
+
+```powershell
+$experiment = @(
+  '--origin', 'https://<owner-only-app-host>',
+  '--subscription', '<subscription-guid>',
+  '--tenant', '<tenant-guid>',
+  '--auth-client-id', '<application-client-guid>',
+  '--source-commit', '<deployed-full-commit>',
+  '--image-digest', 'sha256:<verified-64-hex-digest>',
+  '--fixtures', 'C:\private-inputs\audio\manifest.json',
+  '--out', 'C:\private-results\experiment-001',
+  '--seed', '12345',
+  '--formal'
+)
+node .\scripts\run-experiments.ts @experiment
+node .\scripts\run-experiments.ts @experiment --execute
+node .\scripts\analyze-experiments.ts --run 'C:\private-results\experiment-001' --report 'analysis-001.json'
+```
+
+Without `--execute`, the CLI reports **not executed** and does not authenticate,
+launch a browser or call a model. This is argument/path checking, not proof that
+the fixtures, deployment or service are usable. For a diagnostic pilot, replace
+`--formal` with `--limit 2` and use a different output directory; a pilot is not a
+formal 100-trial result.
+
+Formal runs have five scenarios, ten paired repetitions and both modes, processed
+sequentially with a 180-second per-trial bound. Normal runs observe 45 seconds
+after the first clip. Cancel, replacement and backchannel wait up to 30 seconds
+for fresh received-PCM activity before the second clip, then observe 45 seconds.
+Boundary trials instead inject the brief cancel on the first observation of
+red at x >= 5 with pending work: they do **not** require simultaneous speech.
+Lack of audio overlap makes the audio metric missing, not the action boundary
+invalid.
+
+The [PCM contract](apps/web/README.md) uses one measurement clock and fixed
+20-ms/-45-dBFS/3-on/6-off windows. Pauses, forward frame gaps and unobserved stops
+must not turn into apparent zero-latency successes. Audio metrics carry missing
+reasons; action observations and final voice-usage confirmation are reported
+separately. An unconfirmed usage total is neither zero cost nor evidence that an
+otherwise observed action goal failed. Reports retain all 100 planned slots.
+
+AudioContext/performance anchor offsets can vary during a valid capture. Their
+full observed min/max envelope is used only to attribute a measured onset to a
+fixture: the entire interval must fit within that fixture. The envelope width is
+retained as `anchorOffsetSpreadMs`; it is not added to, or subtracted from, the
+same-context audio duration. Ambiguous attribution remains missing. Backwards
+clocks, future anchors and inconsistent sample sequences are still invalid.
+The live activity gate uses the latest sample's paired clocks and delivery age,
+not an old offset from the beginning of the run.
+
+`goalMet` means conformance to the predefined **mode-specific** scenario rule.
+For example, the A cancellation rule expects an ignored intent and completed red
+movement, whereas B expects cancellation of pending work with no subsequent
+target steps. It is not a shared user-intent success rate or a model-quality
+score. Compare the recorded cancellation counts, pending targets and committed
+steps separately. The driver waits for the actual browser microphone/peer before
+input and for completion of the UI's close flow before reporting release.
+
+Resume with the **same arguments and output** plus `--execute --resume`.
+Started slots are never retried merely because they failed or the process crashed.
+A leftover lock is not automatically stolen: first prove the old process is gone
+and the service is idle before an operator removes that exact lock. Configuration
+drift is a stop condition, not permission to silently update the manifest.
+The analyzer checks evidence hashes and recomputes PCM metrics; use a new report
+filename rather than overwriting an existing analysis.
+
 ## Public repository boundary
 
 This repository is for application code, tests, infrastructure templates, and
