@@ -6,6 +6,9 @@ Dependencies are pinned in this workspace's package manifest. Install from the
 repository root using its lockfile.
 `@fastify/static` is pinned to 10.1.3 (Fastify 5.x compatible) for its path traversal
 and noncanonical URL fixes; do not downgrade to the affected 8.x release.
+Static files are resolved at request time, not enumerated only at startup, so
+new hashed assets referenced by a rebuilt index remain accessible. Global owner
+authentication and static-root confinement apply to those requests too.
 
 ## Private runtime configuration
 
@@ -29,6 +32,11 @@ Do not commit actual resource endpoints, identities, tokens, recordings, or resu
 | `AZURE_CLIENT_ID` | Optional user-assigned managed identity client ID. |
 | `STATIC_DIRECTORY` | Optional absolute path to the built SPA only. No repository-root serving. |
 | `STEP_INTERVAL_MS` | Game-engine movement step interval, default `1000`; integer 100–5000. Identical in both modes. |
+| `AZURE_STORAGE_ACCOUNT_NAME` | Optional private Blob account name, not a URL/key/connection string. Omitted means exports return `export_not_configured`. |
+| `AZURE_STORAGE_CONTAINER` | Existing private container; defaults to `experiments`. |
+| `SOURCE_COMMIT` | Optional full 40/64-character hexadecimal commit hash included in exports. |
+| `MAINTENANCE_PORT` | Unset disables the operator listener. Bicep sets `3001`; it binds only to `127.0.0.1`, never the public host. |
+| `CLOSE_TIMEOUT_MS` | Final-usage close grace, default `8000`; integer 1-10000. Identical in both modes. Unconfirmed usage remains explicitly unconfirmed. |
 
 **EasyAuth is a deployment trust boundary.** The application validates
 `x-ms-client-principal`, but cannot independently authenticate this header.
@@ -36,7 +44,28 @@ The production ingress must require authenticated EasyAuth requests and prevent
 direct access that bypasses the identity proxy or preserves forged identity headers.
 Do not configure trusted-proxy mode on an unprotected public listener.
 
+## Operator maintenance
+
+When explicitly enabled, a separate HTTP listener binds only to loopback.
+It is not a Fastify route and must not be exposed by ingress or port forwarding.
+Container operators can run `node /app/packages/deployment/client.ts drain`,
+`status`, or `resume` inside the Linux runtime container.
+
+Drain synchronously closes admission and waits for creation, live work, and
+asynchronous usage collection to release the single reservation. It does not
+cancel that work. The client polls every five seconds for at most eleven minutes;
+each request is independently bounded. Only verified inactive-and-draining state
+produces the exact `VOICE_ACTION_LAB_DRAIN_READY` line. An exec transport exit
+code, inactivity alone, or a substring match is not evidence that drain succeeded.
+Timeout or failure leaves admission blocked for explicit operator recovery.
+`resume` reopens admission; it does not restart any old operation.
+The listener is closed with the application, including startup failure cleanup.
+
 ## Browser API
+
+Deployment drain blocks both new live and simulation sessions with
+`503 deployment_in_progress`, without stopping the existing session.
+`/api/config` reports temporary unavailability during drain.
 
 All API routes require the configured owner identity. POST requests and the
 events WebSocket require an allowed `Origin`. The health endpoint is public
@@ -118,18 +147,56 @@ Graceful close waits for `session.closed` and final usage. Timeout, disconnect, 
 failed attachment records `final_usage_unconfirmed`; this does not assert that
 remote billing stopped. Final usage is a last cumulative value, not a sum of updates.
 
-**Private export is intentionally not implemented.** There is no export endpoint
-and no filesystem result writer. Storage/export requires a separately reviewed
-private destination outside the repository.
+## Optional private Blob exports
+
+The application uses one configured Azure credential instance for live requests
+and Blob exports. Production requires managed identity. It does not create a
+container, grant roles, enable public access, issue SAS URLs, or write local result
+files. Infrastructure must supply the existing private container, Blob data-plane
+RBAC and private DNS/network connectivity. The standard Blob endpoint resolves
+through the private network; it is never returned to the browser.
+
+- `POST /api/exports {}`: owner and Origin required; only after the current run
+  fully closes. Returns **201** `{runId, downloadPath}`. The path is an authenticated
+  application route, not a Blob URL.
+- `GET /api/exports/:runId`: owner-authenticated JSON attachment. The persisted
+  owner is checked even when a different user owns the currently active run.
+- `DELETE /api/exports/:runId`: owner and Origin required; body omitted or `{}`.
+  Returns **200** `{runId, deleted:true}`. Azure soft-delete/version retention may
+  retain recoverable copies according to infrastructure policy.
+
+The blob name is `experiments/{runId}.json` **inside the configured container**.
+Run IDs must be UUIDs. An owner fingerprint is stored in Blob metadata, not in the
+downloaded JSON. Conditional creation prevents overwrites; ETag conditions bind
+reads/deletes to the ownership-checked version.
+
+The versioned export contains source, redacted final game state/events, close/export
+timestamps, voice-session cumulative usage status and model/pacing/time-limit settings.
+`SOURCE_COMMIT` is included when configured. It omits free-text event details,
+session messages, prompts, audio, transcript text, SDP, credentials, account names
+and raw upstream payloads. Opaque operation/call/delegation correlation IDs and
+bounded transcript timing metadata are retained; they are not synchronized audio
+latency measurements. Voice usage does not imply complete backend-token billing.
+
+Exports are capped at 2 MiB, 3,000 operations and 20,000 events, with explicit **413**
+instead of silently truncating scientific results. Storage requests have a 15-second
+abort deadline. Missing configuration returns **503** `export_not_configured`;
+active/no closed run returns **409**; duplicate export returns **409**; missing
+export returns **404**; a different persisted owner returns **403**. Storage failures
+are sanitized error codes, never success-shaped responses or raw SDK errors.
+
+Tests can inject `PrivateExportStore` through `buildApp(config, {exportStore})`.
+Export storage must still be configured explicitly, so an injected store cannot
+silently enable an unconfigured feature.
 
 ## Validation
 
 From the repository root after workspace dependency installation and engine integration:
 
 ```text
-node --test tests/server.test.ts tests/server-gateway.test.ts
+node --test tests/server.test.ts tests/server-gateway.test.ts tests/server-exports.test.ts
 node node_modules/typescript/bin/tsc --noEmit
-node node_modules/eslint/bin/eslint.js apps/server tests/server.test.ts tests/server-gateway.test.ts
+node node_modules/eslint/bin/eslint.js apps/server tests/server.test.ts tests/server-gateway.test.ts tests/server-exports.test.ts
 ```
 
 Tests use fake credentials/HTTP and local WebSockets only, never live Azure calls.

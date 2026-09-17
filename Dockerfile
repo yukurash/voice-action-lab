@@ -23,6 +23,7 @@ COPY --from=build --chown=node:node /app/apps/server /app/apps/server
 COPY --from=build --chown=node:node /app/packages /app/packages
 COPY --from=build --chown=node:node /app/apps/web/dist /app/apps/web/dist
 ARG SOURCE_COMMIT
+ENV SOURCE_COMMIT=${SOURCE_COMMIT}
 LABEL org.opencontainers.image.source="https://github.com/yukurash/voice-action-lab"
 LABEL org.opencontainers.image.revision="${SOURCE_COMMIT}"
 USER node

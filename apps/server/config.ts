@@ -19,6 +19,9 @@ export interface ServerConfig {
   credentialTenantId?: string;
   managedIdentityClientId?: string;
   staticDirectory?: string;
+  exportStorage: { accountName: string; container: string } | null;
+  sourceCommit?: string;
+  maintenancePort?: number;
   sessionLimitMs: number;
   idleLimitMs: number;
   tickMs: number;
@@ -31,6 +34,10 @@ const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const loopback = new Set(["127.0.0.1", "::1", "localhost"]);
 
 export function validateConfig(config: ServerConfig): void {
+  if (config.maintenancePort !== undefined
+    && (!Number.isInteger(config.maintenancePort) || config.maintenancePort < 0 || config.maintenancePort > 65535)) {
+    throw new Error("Invalid maintenance port.");
+  }
   if (!Number.isInteger(config.port) || config.port < 0 || config.port > 65535) {
     throw new Error("Invalid server port.");
   }
@@ -68,6 +75,14 @@ export function validateConfig(config: ServerConfig): void {
   }
   if (config.staticDirectory && !isAbsolute(config.staticDirectory)) {
     throw new Error("STATIC_DIRECTORY must be absolute.");
+  }
+  if (config.exportStorage && (!/^[a-z0-9]{3,24}$/.test(config.exportStorage.accountName)
+    || !/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(config.exportStorage.container)
+    || config.exportStorage.container.includes("--"))) {
+    throw new Error("Invalid private export storage account or container name.");
+  }
+  if (config.sourceCommit !== undefined && !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(config.sourceCommit)) {
+    throw new Error("SOURCE_COMMIT must be a full hexadecimal commit hash.");
   }
   if (!Number.isInteger(config.sessionLimitMs) || config.sessionLimitMs <= 0 || config.sessionLimitMs > 600_000
     || !Number.isInteger(config.idleLimitMs) || config.idleLimitMs <= 0 || config.idleLimitMs > 90_000
@@ -113,11 +128,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     ...(env.AZURE_TENANT_ID ? { credentialTenantId: env.AZURE_TENANT_ID } : {}),
     ...(env.AZURE_CLIENT_ID ? { managedIdentityClientId: env.AZURE_CLIENT_ID } : {}),
     ...(env.STATIC_DIRECTORY ? { staticDirectory: env.STATIC_DIRECTORY } : {}),
+    exportStorage: env.AZURE_STORAGE_ACCOUNT_NAME ? {
+      accountName: env.AZURE_STORAGE_ACCOUNT_NAME,
+      container: env.AZURE_STORAGE_CONTAINER ?? "experiments",
+    } : null,
+    ...(env.SOURCE_COMMIT ? { sourceCommit: env.SOURCE_COMMIT } : {}),
+    ...(env.MAINTENANCE_PORT === undefined ? {} : { maintenancePort: Number(env.MAINTENANCE_PORT) }),
     sessionLimitMs: 600_000,
     idleLimitMs: 90_000,
     tickMs: 500,
     stepIntervalMs: Number(env.STEP_INTERVAL_MS ?? "1000"),
-    closeTimeoutMs: 3_000,
+    closeTimeoutMs: Number(env.CLOSE_TIMEOUT_MS ?? "8000"),
     negotiationTimeoutMs: 45_000,
   };
   validateConfig(config);
