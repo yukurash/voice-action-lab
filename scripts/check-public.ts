@@ -3,7 +3,7 @@ import { command, isMain, runCli } from "./cli.ts";
 const rootFiles = new Set([
   ".gitattributes", ".gitignore", ".nvmrc", ".dockerignore",
   "README.md", "LICENSE", "AGENTS.md", "package.json", "package-lock.json",
-  "tsconfig.json", "eslint.config.js",
+  "tsconfig.json", "eslint.config.js", "Dockerfile",
 ]);
 const sourceRoots = new Set([
   ".github", "apps", "packages", "infra", "scripts", "tests",

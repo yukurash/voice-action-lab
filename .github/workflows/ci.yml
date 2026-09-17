@@ -48,10 +48,26 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "Bicep failed: $($template.Name)" }
           }
 
+  browser:
+    name: Browser regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:browser --workspace @voice-action-lab/web -- --workers=2
+
   ci:
     name: ci
     if: ${{ always() }}
-    needs: [checks, infrastructure]
+    needs: [checks, infrastructure, browser]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
@@ -59,4 +75,5 @@ jobs:
         env:
           CHECK_RESULT: ${{ needs.checks.result }}
           INFRA_RESULT: ${{ needs.infrastructure.result }}
-        run: test "$CHECK_RESULT" = success && test "$INFRA_RESULT" = success
+          BROWSER_RESULT: ${{ needs.browser.result }}
+        run: test "$CHECK_RESULT" = success && test "$INFRA_RESULT" = success && test "$BROWSER_RESULT" = success

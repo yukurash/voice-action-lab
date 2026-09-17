@@ -15,6 +15,8 @@ interface EngineOptions {
   runId: string;
   /** Run-relative milliseconds, on the same clock as delegation creation offsets. */
   now: () => number;
+  /** Optional 100..5000ms pacing; omitted means each host tick may commit a step. */
+  stepIntervalMs?: number;
 }
 
 interface Delegation {
@@ -58,6 +60,7 @@ export class GameEngine {
   readonly #mode: ExperimentMode;
   readonly #runId: string;
   readonly #now: () => number;
+  readonly #stepIntervalMs: number | undefined;
   readonly #cargo: Record<CargoColor, number> = { red: 0, blue: 0 };
   readonly #operations: Operation[] = [];
   readonly #events: LabEvent[] = [];
@@ -66,6 +69,7 @@ export class GameEngine {
   #epoch = 0;
   #stopped = false;
   #cancellationBarrierMs: number | null = null;
+  #lastStepAtMs = 0;
 
   constructor(options: EngineOptions) {
     if (!isRecord(options)) throw new TypeError("Engine options must be an object.");
@@ -74,9 +78,15 @@ export class GameEngine {
     }
     if (!isId(options.runId)) throw new TypeError("Invalid runId.");
     if (typeof options.now !== "function") throw new TypeError("now must be a function.");
+    if (options.stepIntervalMs !== undefined
+      && (!Number.isInteger(options.stepIntervalMs)
+        || options.stepIntervalMs < 100 || options.stepIntervalMs > 5_000)) {
+      throw new RangeError("stepIntervalMs must be an integer between 100 and 5000.");
+    }
     this.#mode = options.mode;
     this.#runId = options.runId;
     this.#now = options.now;
+    this.#stepIntervalMs = options.stepIntervalMs;
   }
 
   /**
@@ -203,6 +213,13 @@ export class GameEngine {
     const operation = this.#operations.find(isPending);
     if (!operation) return;
     const atMs = this.#time();
+    const target = operation.destination === "left" ? 0 : 6;
+    const from = this.#cargo[operation.cargo];
+    // Pace from queue admission or the last committed step; never catch up in a burst.
+    if (from !== target && this.#stepIntervalMs !== undefined
+      && atMs - Math.max(operation.createdAtMs, this.#lastStepAtMs) < this.#stepIntervalMs) {
+      return;
+    }
     if (operation.status === "queued") {
       operation.status = "running";
       this.#emit(atMs, "operation.started", operation.id, operation.delegationId, {
@@ -210,11 +227,10 @@ export class GameEngine {
         epoch: operation.epoch,
       });
     }
-    const target = operation.destination === "left" ? 0 : 6;
-    const from = this.#cargo[operation.cargo];
     if (from !== target) {
       const to = from + Math.sign(target - from);
       this.#cargo[operation.cargo] = to;
+      this.#lastStepAtMs = atMs;
       this.#emit(atMs, "operation.step", operation.id, operation.delegationId, {
         callId: operation.callId,
         epoch: operation.epoch,

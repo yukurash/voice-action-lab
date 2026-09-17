@@ -8,7 +8,7 @@ import { hasSecretSignature, pathViolation } from "../scripts/check-public.ts";
 
 test("public code, CI and placeholder configuration are allowed", () => {
   for (const path of [
-    "README.md", "package-lock.json", ".github/workflows/ci.yml",
+    "README.md", "package-lock.json", ".github/workflows/ci.yml", "Dockerfile", ".dockerignore",
     "apps/web/src/App.tsx", "infra/main.bicep", "apps/server/.env.example",
   ]) assert.equal(pathViolation(path), undefined, path);
 });

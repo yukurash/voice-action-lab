@@ -15,9 +15,12 @@ const moveBlue: GameCommand = { type: "move", cargo: "blue", destination: "right
 const cancel: GameCommand = { type: "cancel" };
 const replaceRed: GameCommand = { type: "replace", cargo: "red", destination: "left" };
 
-function fixture(mode: ExperimentMode = "cancel-actions") {
+function fixture(mode: ExperimentMode = "cancel-actions", stepIntervalMs?: number) {
   let now = 0;
-  const engine = new GameEngine({ mode, runId: "run-1", now: () => now });
+  const engine = new GameEngine({
+    mode, runId: "run-1", now: () => now,
+    ...(stepIntervalMs === undefined ? {} : { stepIntervalMs }),
+  });
   return {
     engine,
     setTime(value: number) { now = value; },
@@ -225,6 +228,150 @@ for (const mode of modes) {
     assert.equal(f.engine.snapshot().cargo.red, 1);
   });
 }
+
+for (const mode of modes) {
+  test(`${mode}: explicit intervals enforce exact step deadlines, sequential pacing, and no catch-up bursts`, () => {
+    for (const interval of [100, 1_000, 5_000]) {
+      const f = fixture(mode, interval);
+      f.register();
+      f.dispatch("red", moveRed);
+      f.dispatch("blue", moveBlue);
+      const queued = f.engine.snapshot();
+      f.setTime(interval - 1);
+      f.engine.tick();
+      assert.deepEqual(f.engine.snapshot(), queued);
+      f.setTime(interval);
+      f.engine.tick();
+      assert.deepEqual(f.engine.snapshot().cargo, { red: 1, blue: 0 });
+      const first = f.engine.snapshot();
+      f.engine.tick();
+      assert.deepEqual(f.engine.snapshot(), first);
+      f.setTime(10 * interval);
+      f.engine.tick();
+      assert.equal(f.engine.snapshot().cargo.red, 2);
+      const delayed = f.engine.snapshot();
+      f.setTime(11 * interval - 1);
+      f.engine.tick();
+      assert.deepEqual(f.engine.snapshot(), delayed);
+      for (let multiplier = 11; multiplier <= 14; multiplier += 1) {
+        f.setTime(multiplier * interval);
+        f.engine.tick();
+      }
+      assert.deepEqual(f.engine.snapshot().cargo, { red: 6, blue: 0 });
+      assert.equal(operation(f.engine.snapshot()).status, "completed");
+      const completed = f.engine.snapshot();
+      f.engine.tick();
+      assert.deepEqual(f.engine.snapshot(), completed);
+      f.setTime(15 * interval);
+      f.engine.tick();
+      assert.deepEqual(f.engine.snapshot().cargo, { red: 6, blue: 1 });
+      assert.deepEqual(
+        f.engine.snapshot().events.filter((event) => event.kind === "operation.step").map((event) => event.atMs),
+        [1, 10, 11, 12, 13, 14, 15].map((multiplier) => multiplier * interval),
+      );
+    }
+  });
+}
+
+test("timed cancellation invalidates due steps and fresh work waits from its own admission time", () => {
+  const f = fixture("cancel-actions", 1_000);
+  f.register();
+  f.dispatch("red", moveRed);
+  f.dispatch("blue", moveBlue);
+  f.setTime(1_000);
+  f.engine.tick();
+  f.setTime(1_500);
+  f.dispatch("cancel", cancel);
+  const cancelled = f.engine.snapshot();
+  f.setTime(100_000);
+  f.engine.tick();
+  assert.deepEqual(f.engine.snapshot(), cancelled);
+  f.register("fresh", 100_000);
+  f.dispatch("fresh", { type: "move", cargo: "red", destination: "left" }, "fresh");
+  const admitted = f.engine.snapshot();
+  f.setTime(100_999);
+  f.engine.tick();
+  assert.deepEqual(f.engine.snapshot(), admitted);
+  f.setTime(101_000);
+  f.engine.tick();
+  assert.deepEqual(f.engine.snapshot().cargo, { red: 0, blue: 0 });
+  assert.deepEqual(f.engine.snapshot().operations.slice(0, 2), cancelled.operations);
+});
+
+test("timed replacement preserves committed steps, resets admission deadline, and retries do not postpone it", () => {
+  const f = fixture("cancel-actions", 1_000);
+  f.register();
+  f.dispatch("red", moveRed);
+  f.dispatch("blue", moveBlue);
+  for (const time of [1_000, 2_000]) {
+    f.setTime(time);
+    f.engine.tick();
+  }
+  f.setTime(2_500);
+  const receipt = f.dispatch("replace", replaceRed);
+  const replaced = f.engine.snapshot();
+  assert.deepEqual(replaced.cargo, { red: 2, blue: 0 });
+  f.setTime(3_000);
+  assert.deepEqual(f.dispatch("replace", replaceRed), receipt);
+  f.setTime(3_499);
+  f.engine.tick();
+  assert.deepEqual(f.engine.snapshot(), replaced);
+  f.setTime(3_500);
+  f.engine.tick();
+  assert.equal(f.engine.snapshot().cargo.red, 1);
+  f.setTime(4_500);
+  f.engine.tick();
+  assert.deepEqual(f.engine.snapshot().cargo, { red: 0, blue: 0 });
+  assert.equal(operation(f.engine.snapshot(), 2).status, "completed");
+  assert.deepEqual(f.engine.snapshot().operations.slice(0, 2), replaced.operations.slice(0, 2));
+});
+
+test("timed voice-only replacement keeps earlier operations and their pacing unchanged", () => {
+  const f = fixture("voice-only", 1_000);
+  f.register();
+  f.dispatch("red", moveRed);
+  f.dispatch("blue", moveBlue);
+  f.setTime(1_000);
+  f.engine.tick();
+  f.setTime(1_500);
+  f.dispatch("replace", replaceRed);
+  for (let time = 2_000; time <= 12_000; time += 1_000) {
+    f.setTime(time);
+    f.engine.tick();
+  }
+  assert.deepEqual(f.engine.snapshot().cargo, { red: 6, blue: 6 });
+  assert.equal(operation(f.engine.snapshot(), 2).status, "queued");
+  f.setTime(13_000);
+  f.engine.tick();
+  assert.deepEqual(f.engine.snapshot().cargo, { red: 5, blue: 6 });
+  assert.ok(f.engine.snapshot().operations.every((op) => op.status !== "cancelled"));
+});
+
+test("pacing never delays already-at-destination completion or defeats terminal stop", () => {
+  for (const mode of modes) {
+    const f = fixture(mode, 1_000);
+    f.register();
+    f.dispatch("left", { type: "move", cargo: "red", destination: "left" });
+    f.dispatch("right", moveRed);
+    f.engine.tick();
+    assert.equal(operation(f.engine.snapshot()).status, "completed");
+    assert.equal(operation(f.engine.snapshot()).endedAtMs, 0);
+    f.engine.stop("before-deadline");
+    const stopped = f.engine.snapshot();
+    f.setTime(100_000);
+    f.engine.tick();
+    assert.deepEqual(f.engine.snapshot(), stopped);
+    assert.equal(f.dispatch("late", moveBlue).outcome, "rejected");
+  }
+});
+
+test("invalid explicit step intervals fail before the engine is constructed", () => {
+  for (const stepIntervalMs of [null, "1000", NaN, Infinity, -Infinity, -1, 0, 99, 5_001, 1_000.5]) {
+    assert.throws(() => new GameEngine({
+      mode: "voice-only", runId: "invalid-interval", now: () => 0, stepIntervalMs,
+    } as ConstructorParameters<typeof GameEngine>[0]), /stepIntervalMs/i);
+  }
+});
 
 test("identical A/B inputs differ only in whether cancellation is applied", () => {
   const snapshots = modes.map((mode) => {
@@ -566,8 +713,8 @@ test("events have contiguous sequences, caller timestamps, meaningful IDs, and c
   assert.equal(events.find((event) => event.kind === "cancellation.accepted")?.details.cancelledCount, 1);
 });
 
-function stress(mode: ExperimentMode, seed: number): GameSnapshot {
-  const f = fixture(mode);
+function stress(mode: ExperimentMode, seed: number, stepIntervalMs?: number): GameSnapshot {
+  const f = fixture(mode, stepIntervalMs);
   let randomState = seed;
   const random = (max: number) => {
     randomState = (Math.imul(randomState, 1664525) + 1013904223) >>> 0;
@@ -580,8 +727,10 @@ function stress(mode: ExperimentMode, seed: number): GameSnapshot {
   f.register();
   let previous = f.engine.snapshot();
   let barrier = -1;
+  let lastStepAtMs = 0;
+  let now = 0;
   for (let index = 0; index < 96; index += 1) {
-    const now = index + 1;
+    now += stepIntervalMs === undefined ? 1 : random(stepIntervalMs * 3);
     f.setTime(now);
     const action = random(12);
     let ticked = false;
@@ -661,6 +810,11 @@ function stress(mode: ExperimentMode, seed: number): GameSnapshot {
         positions[cargo] = to;
         const firstPending = previous.operations.find(pending);
         assert.equal(event.operationId, firstPending?.id);
+        assert.ok(firstPending);
+        if (stepIntervalMs !== undefined) {
+          assert.ok(event.atMs - Math.max(firstPending.createdAtMs, lastStepAtMs) >= stepIntervalMs);
+        }
+        lastStepAtMs = event.atMs;
       }
     }
     assert.deepEqual(next.cargo, positions);
@@ -693,12 +847,16 @@ for (const mode of modes) {
   test(`${mode}: 256 deterministic interleavings never advance cancelled work or cross a commit boundary`, () => {
     for (let seed = 1; seed <= 256; seed += 1) stress(mode, seed);
   });
+  test(`${mode}: 128 timed interleavings preserve cancellation barriers and minimum step intervals`, () => {
+    for (let seed = 1; seed <= 128; seed += 1) stress(mode, seed, 1_000);
+  });
 }
 
 test("seeded interleavings are reproducible, including complete event histories", () => {
   for (const mode of modes) {
     for (const seed of [1, 17, 93]) {
       assert.deepEqual(stress(mode, seed), stress(mode, seed));
+      assert.deepEqual(stress(mode, seed, 1_000), stress(mode, seed, 1_000));
     }
   }
 });
