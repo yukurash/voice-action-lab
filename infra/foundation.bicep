@@ -4,7 +4,8 @@ param location string = resourceGroup().location
 param namePrefix string = 'voice-action-lab'
 param foundryAccountName string
 param operatorObjectId string
-param githubRepository string = 'yukurash/voice-action-lab'
+@description('Exact GitHub OIDC subject, including immutable owner/repository IDs when emitted. Read the token claim from the workflow; do not weaken it to a legacy name-only subject.')
+param githubSubject string
 
 var suffix = uniqueString(resourceGroup().id)
 var tags = {
@@ -34,7 +35,7 @@ resource federation 'Microsoft.ManagedIdentity/userAssignedIdentities/federatedI
   name: 'github-production'
   properties: {
     issuer: 'https://token.actions.githubusercontent.com'
-    subject: 'repo:${githubRepository}:environment:production'
+    subject: githubSubject
     audiences: ['api://AzureADTokenExchange']
   }
 }
