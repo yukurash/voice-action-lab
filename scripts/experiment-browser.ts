@@ -60,7 +60,52 @@ export async function openExperimentBrowser(origin: string, bearer?: string): Pr
     });
     await context.route("**/*", (route) => new URL(route.request().url()).origin === origin
       ? route.continue() : route.abort());
-    await context.addInitScript(() => {
+    await context.addInitScript(({ authenticated }) => {
+      if (authenticated && typeof AudioWorklet !== "undefined") {
+        const nativeAddModule = AudioWorklet.prototype.addModule;
+        AudioWorklet.prototype.addModule = async function (moduleURL, options) {
+          const url = new URL(String(moduleURL), window.location.href);
+          if (url.origin !== window.location.origin || url.username || url.password || url.search || url.hash
+            || !/^\/audioMeasurement\.worklet-[\w-]+\.js$/.test(url.pathname)) {
+            throw new Error("unexpected_authenticated_worklet");
+          }
+          // Worklet module requests can bypass Playwright's page bearer headers.
+          const response = await fetch(url, {
+            credentials: "same-origin", redirect: "error", cache: "no-store",
+            signal: AbortSignal.timeout(5_000),
+          });
+          const mime = response.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase();
+          if (response.status !== 200 || (mime !== "application/javascript" && mime !== "text/javascript")) {
+            await response.body?.cancel();
+            throw new Error("authenticated_worklet_response_invalid");
+          }
+          const reader = response.body?.getReader();
+          if (!reader) throw new Error("authenticated_worklet_body_missing");
+          const parts: BlobPart[] = [];
+          let bytes = 0;
+          try {
+            for (;;) {
+              const entry = await reader.read();
+              if (entry.done) break;
+              bytes += entry.value.byteLength;
+              if (bytes > 256 * 1024) {
+                await reader.cancel();
+                throw new Error("authenticated_worklet_too_large");
+              }
+              parts.push(new Uint8Array(entry.value).buffer);
+            }
+          } finally {
+            reader.releaseLock();
+          }
+          if (!bytes) throw new Error("authenticated_worklet_body_missing");
+          const objectUrl = URL.createObjectURL(new Blob(parts, { type: "application/javascript" }));
+          try {
+            await nativeAddModule.call(this, objectUrl, options);
+          } finally {
+            URL.revokeObjectURL(objectUrl);
+          }
+        };
+      }
       const probe: ExperimentProbe = { playbacks: [], measurements: [], transcripts: [], errors: [] };
       window.__voiceActionExperiment = probe;
       window.addEventListener("voice-action-lab:audio-measurement", (event) => {
@@ -127,7 +172,7 @@ export async function openExperimentBrowser(origin: string, bearer?: string): Pr
         });
         return channel;
       };
-    });
+    }, { authenticated: bearer !== undefined });
     const page = await context.newPage();
     const routes: string[] = [];
     page.on("request", (request) => {
