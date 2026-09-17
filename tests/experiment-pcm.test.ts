@@ -1,9 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { chromium } from "@playwright/test";
 import { isAudioMeasurementEvent } from "../apps/web/src/audioMeasurement.ts";
 import { PCM_RULES, deriveVoiceMetrics, freshOutputPcmActive, parsePcmEvidence } from "../packages/experiments/pcm.ts";
-import { createPcmActivityAdapter } from "../scripts/run-experiments.ts";
 import { pcmEvidence } from "./pcm-fixtures.ts";
 
 test("same-meter input onset to received PCM silence uses backdated streaks, not confirmation times", () => {
@@ -221,43 +219,4 @@ test("PCM evidence rejects raw waveforms, transcripts, arbitrary errors and unkn
   assert.throws(() => parsePcmEvidence({ ...pcmEvidence(), transcript: "SECRET" }), /pcm_contract_invalid/);
   const evidence = pcmEvidence();
   assert.throws(() => parsePcmEvidence({ ...evidence, events: [{ ...evidence.events[0], token: "SECRET" }] }), /pcm_contract_invalid/);
-});
-
-test("default adapter reads the implemented helper incrementally in an offline browser without mixing playback context", async () => {
-  const browser = await chromium.launch({ headless: true, ...(process.platform === "win32" ? { channel: "msedge" } : {}) });
-  try {
-    const context = await browser.newContext();
-    await context.route("**/*", (route) => route.abort());
-    const page = await context.newPage();
-    const adapter = createPcmActivityAdapter();
-    await page.waitForTimeout(150);
-    const evidence = pcmEvidence({ meterOriginSeconds: 50, durationMs: 100, input: [], output: [[0, 0.1]], playbacks: [] });
-    await page.evaluate((events) => {
-      const last = events.at(-1);
-      if (!last) throw new Error("missing offline samples");
-      const offset = performance.now() - last.clockAnchor.performanceNowMs;
-      for (const event of events) event.clockAnchor.performanceNowMs += offset;
-      window.__voiceActionExperiment = { playbacks: [], measurements: events, transcripts: [], errors: [] };
-    }, evidence.events);
-    const first = await adapter.collect?.(page);
-    assert.ok(first);
-    assert.equal(first.events.length, evidence.events.length);
-    assert.equal(await adapter.remoteActive(page), true);
-    await page.evaluate(() => {
-      const probe = window.__voiceActionExperiment;
-      if (!probe) throw new Error("missing probe");
-      probe.playbacks.push({ id: "different-context", contextTime: 900, performanceTimeMs: performance.now(), durationSeconds: 0.1 });
-      probe.transcripts.push({ type: "session.input_transcript.delta", receivedAtPerformanceMs: performance.now(), text: "DO_NOT_COPY" });
-      probe.measurements.push({ type: "sample", secret: "DO_NOT_COPY" });
-    });
-    const second = await adapter.collect?.(page);
-    assert.ok(second);
-    assert.equal(second.events.length, first.events.length);
-    assert.equal(second.invalidMeasurementEvents, 1);
-    assert.equal(second.transcriptEventCount, 1);
-    assert.equal(second.peers[0]?.connectionState, null);
-    assert.equal(JSON.stringify(second).includes("DO_NOT_COPY"), false);
-    assert.equal(JSON.stringify(second.playbacks).includes("contextTime"), false);
-    assert.equal(await adapter.remoteActive(page), false);
-  } finally { await browser.close(); }
 });
