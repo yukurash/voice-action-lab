@@ -5,9 +5,11 @@ application-level cancellation of pending actions.
 
 ## Status
 
-Application implementation is in progress. GPT-Live-1 deployment, WebRTC audio
-output, server-side control, and normal session closure have been smoke-tested
-on Azure. This is not yet a completed interactive demo or an A/B experiment.
+The browser application and server are implemented. A real-service smoke test
+has exercised the UI connection button, synthetic Japanese microphone input,
+GPT-Live delegation, backend tool calls, paced game movement, incoming audio,
+and normal shutdown. The owner-only cloud app and formal A/B experiment are
+still being prepared.
 Simulated results must never be presented as live-service measurements.
 
 ## Intended scope
@@ -48,10 +50,18 @@ npm run verify
 ```
 
 `verify` checks the Git index for disallowed public files and credential
-signatures, type-checks the TypeScript tooling, runs ESLint, builds it, and runs
-the tooling tests. These checks do not validate a voice model or a deployed app.
+signatures, type-checks the server and client, runs ESLint and unit tests, and
+builds the browser application. Unit tests do not validate a live model.
 CI runs them on Linux and Windows; the required aggregate check is named `ci`.
-CI also compiles every Bicep template without Azure credentials.
+CI also compiles every Bicep template and runs the synthetic browser regression
+suite without Azure credentials. The required `ci` gate includes these jobs.
+
+For local simulation, set `AUTH_MODE=dev`, bind the server to loopback, and allow
+the exact browser origins in `ALLOWED_ORIGINS`. Start `npm start` and, in another
+terminal, `npm run dev --workspace @voice-action-lab/web`. The server uses port
+3000; Vite uses 5173. Live mode is off by default and must be explicitly configured.
+See the [server configuration](apps/server/README.md) and
+[client lifecycle](apps/web/README.md). Keep actual environment files outside Git.
 
 ## Azure infrastructure
 
@@ -75,6 +85,25 @@ Azure RBAC is scoped to this project's resources, not the subscription.
 Blob Storage and Key Vault use Private Link and private DNS in the app's virtual
 network. Their public data-plane access stays disabled, including for the owner.
 Do not weaken a subscription's network policy to make local data access work.
+
+[Application deployment](infra/app.bicep) initially keeps ingress internal.
+Verify EasyAuth, its owner-only identity policy, and readiness before setting
+`externalIngress=true`. The image is selected by digest, not a mutable tag.
+The [container build](Dockerfile) uses a pinned Node image and a non-root runtime.
+
+The [publishing workflow](.github/workflows/deploy.yml) accepts only successful
+`ci` commits reachable from `main`. Its `production` environment must allow only
+`main`. Configure `AZURE_PUBLISHER_CLIENT_ID`, `AZURE_TENANT_ID`,
+`AZURE_SUBSCRIPTION_ID`, `AZURE_REGISTRY_NAME`, `AZURE_RESOURCE_GROUP`, and
+`AZURE_CONTAINER_APP` as environment variables, not secret values in code.
+Keep the repository-level `AZURE_DEPLOY_ENABLED` variable `false` during bootstrap;
+enable it only after the owner-only app is verified. No personal access token or
+long-lived Azure credential is copied into Actions. Active sessions can be
+interrupted by a deployment; freeze releases during a measurement batch.
+
+The Entra login credential has the tenant's permitted lifetime and must be
+rotated before expiry. Model and storage data access use managed identity, not
+that login credential.
 
 WebRTC setup must gather ICE candidates and apply the SDP answer before the
 server attaches the Live sideband. Attaching before the browser connects can

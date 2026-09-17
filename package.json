@@ -4,23 +4,31 @@
   "private": true,
   "type": "module",
   "license": "MIT",
+  "workspaces": ["apps/*"],
   "engines": {
     "node": ">=24 <25"
   },
   "scripts": {
-    "build": "tsc",
-    "typecheck": "tsc --noEmit",
+    "build": "npm run build:server && npm run build:web",
+    "build:server": "tsc",
+    "build:web": "npm run build --workspace @voice-action-lab/web",
+    "typecheck": "tsc --noEmit && npm run typecheck --workspace @voice-action-lab/web",
     "lint": "eslint .",
-    "test": "npm run build && node --test dist/tests/*.test.js",
+    "test": "npm run build:server && node --test dist/tests/*.test.js && npm run test --workspace @voice-action-lab/web",
+    "test:browser": "npm run test:browser --workspace @voice-action-lab/web",
+    "start": "npm run start --workspace @voice-action-lab/server",
     "check:public": "node scripts/check-public.ts",
     "check:identity": "node scripts/check-identity.ts",
-    "verify": "npm run check:public && npm run typecheck && npm run lint && npm test"
+    "verify": "npm run check:public && npm run typecheck && npm run lint && npm test && npm run build:web"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
+    "@playwright/test": "1.63.0",
     "@types/node": "24.13.4",
+    "@types/ws": "8.18.1",
     "eslint": "10.10.0",
     "typescript": "6.0.3",
-    "typescript-eslint": "8.70.0"
+    "typescript-eslint": "8.70.0",
+    "ws": "8.21.3"
   }
 }
