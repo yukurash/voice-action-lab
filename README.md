@@ -100,6 +100,10 @@ Keep the repository-level `AZURE_DEPLOY_ENABLED` variable `false` during bootstr
 enable it only after the owner-only app is verified. No personal access token or
 long-lived Azure credential is copied into Actions. Active sessions can be
 interrupted by a deployment; freeze releases during a measurement batch.
+Set the foundation's `githubSubject` to the exact issued OIDC subject. Newer
+GitHub subjects can include immutable owner and repository IDs; a legacy
+name-only trust entry will not match those claims. Preserve the stronger claim
+rather than changing GitHub to a weaker subject format.
 
 The Entra login credential has the tenant's permitted lifetime and must be
 rotated before expiry. Model and storage data access use managed identity, not
