@@ -77,3 +77,29 @@ isolated ephemeral loopback servers, never a real application's maintenance port
 Protocol references:
 [official Azure CLI exec framing](https://github.com/Azure/azure-cli/blob/dev/src/azure-cli/azure/cli/command_modules/containerapp/_ssh_utils.py),
 [ARM replica API](https://learn.microsoft.com/en-us/rest/api/resource-manager/containerapps/container-apps-revision-replicas/list-replicas?view=rest-resource-manager-containerapps-2025-01-01).
+
+## Verified release controller
+
+[Release orchestration](./release.ts) requires an already healthy old image with
+the runtime health helper. Bootstrap that helper under operator control before
+enabling automated deployment. The old and new images must be immutable digests
+in the same repository; source commits must be complete hashes.
+
+The [Ubuntu workflow adapter](../../scripts/deploy-verified.ts) performs a pinned
+drain, submits an image-only CLI update with `--no-wait`, verifies the new image
+and source through runtime health, then resumes admission. Known transient
+readiness failures are polled for at most six minutes. Invalid proof, wrong
+source, authentication failure, and arbitrary remote stderr fail immediately.
+The CLI update process has a one-minute bound. The workflow has a 45-minute
+overall bound covering normal work and recovery. Only the workflow's Linux
+update adapter is supported; the separate maintenance CLI remains cross-platform.
+
+If update, verification, or resume fails, the controller reads the current ready
+target again and **drains it before rollback**, including any work admitted by a
+new revision. It restores the previous digest, checks the previous source, and
+resumes only after successful health verification. A successful rollback still
+fails the release job with `release_failed_rolled_back`. Unknown concurrent
+images are never overwritten; unavailable drain or failed recovery requires
+explicit operator intervention. An initial drain failure is not automatically
+resumed. Job cancellation, operator concurrency, and unresolved ARM failures
+must not be treated as successful recovery.

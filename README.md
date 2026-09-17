@@ -116,8 +116,11 @@ The [publishing workflow](.github/workflows/deploy.yml) accepts only successful
 `AZURE_CONTAINER_APP` as environment variables, not secret values in code.
 Keep the repository-level `AZURE_DEPLOY_ENABLED` variable `false` during bootstrap;
 enable it only after the owner-only app is verified. No personal access token or
-long-lived Azure credential is copied into Actions. Active sessions can be
-interrupted by a deployment; freeze releases during a measurement batch.
+long-lived Azure credential is copied into Actions. Automated releases use
+loopback drain and verified runtime health, and drain the current ready revision
+again before rollback. See the [operator and recovery contract](packages/deployment/README.md).
+Bootstrap the health helper before enabling automatic deployment, and freeze
+releases throughout a measurement batch.
 Set the foundation's `githubSubject` to the exact issued OIDC subject. Newer
 GitHub subjects can include immutable owner and repository IDs; a legacy
 name-only trust entry will not match those claims. Preserve the stronger claim
