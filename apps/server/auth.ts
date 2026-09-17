@@ -28,7 +28,12 @@ export function ownerFromRequest(request: FastifyRequest, config: ServerConfig):
   } catch {
     throw new HttpError(401, "invalid_principal");
   }
-  if (!principal || principal.auth_typ !== "aad" || !Array.isArray(principal.claims)) {
+  const provider = request.headers["x-ms-client-principal-idp"];
+  const identityType = principal?.auth_typ;
+  const isEntraIdentity = identityType === "aad"
+    ? provider === undefined || provider === "aad"
+    : (identityType === "Bearer" || identityType === "AuthenticationTypes.Federation") && provider === "aad";
+  if (!principal || !isEntraIdentity || !Array.isArray(principal.claims)) {
     console.warn(JSON.stringify({
       event: "easyauth_principal_schema_rejected",
       object: principal !== null,
