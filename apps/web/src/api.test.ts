@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
+import viteConfig from "../vite.config.ts";
 import type { BrowserState } from "../../../packages/contracts/index.ts";
-import { ApiError, idleWarning, isBrowserState, isCommandResponse, isConfig, isSessionAnswer, liveSessionReady, post, request } from "./api.ts";
+import { ApiError, idleWarning, isActivityResponse, isBrowserState, isCommandResponse, isConfig, isSessionAnswer, liveSessionReady, post, request } from "./api.ts";
 
 function fixture(): BrowserState {
   return {
@@ -20,6 +21,16 @@ function fixture(): BrowserState {
 
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
+
+test("development API and WebSocket proxy match the IPv4 server defaults", () => {
+  assert.equal(viteConfig.server?.port, 5173);
+  assert.equal(viteConfig.server?.strictPort, true);
+  const proxy = viteConfig.server?.proxy?.["/api"];
+  assert.ok(proxy && typeof proxy !== "string");
+  assert.equal(proxy.target, "http://127.0.0.1:3000");
+  assert.equal(proxy.ws, true);
+  assert.equal(proxy.changeOrigin, true);
+});
 
 test("validates both modes, sources, operations and primitive event details", () => {
   const state = fixture();
@@ -75,6 +86,21 @@ test("optional idle warning is display-only and never assumed", () => {
   assert.equal(idleWarning(state), null);
   assert.equal(idleWarning({ ...state, session: { ...state.session, ...{ idleWarning: "Stop soon" } } }), "Stop soon");
   assert.equal(idleWarning({ ...state, session: { ...state.session, ...{ idleWarning: 12 } } }), null);
+});
+
+test("activity sends only a relative offset and requires an affirmative acknowledgement", async () => {
+  globalThis.fetch = async (input, init) => {
+    assert.equal(input, "/api/activity");
+    assert.equal(init?.body, '{"offsetMs":2500}');
+    assert.equal(init?.credentials, "same-origin");
+    return Response.json({ ok: true });
+  };
+  assert.deepEqual(await post("/api/activity", { offsetMs: 2500 }, isActivityResponse), { ok: true });
+  for (const value of [null, {}, { ok: false }, { ok: "true" }]) {
+    assert.equal(isActivityResponse(value), false);
+  }
+  globalThis.fetch = async () => Response.json({ ok: false });
+  await assert.rejects(post("/api/activity", { offsetMs: 2500 }, isActivityResponse), /契約と一致しません/);
 });
 
 test("live readiness requires a running live server session in the selected mode", () => {

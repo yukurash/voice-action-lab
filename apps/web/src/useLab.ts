@@ -13,9 +13,16 @@ import {
 } from "./api.ts";
 import type { LabConfig, SessionAnswer } from "./api.ts";
 import { waitForIceGathering, waitForPeerConnection } from "./webrtc.ts";
+import { createAudioActivityMonitor } from "./audioActivity.ts";
+import type { AudioActivityMonitor } from "./audioActivity.ts";
+import type { AudioMeasurementEvent } from "./audioMeasurement.ts";
+import { MAX_MEASUREMENT_RECORDS } from "./audioMeasurement.ts";
+import measurementModuleUrl from "./audioMeasurement.worklet.ts?worker&url";
 
 export type LocalPhase = "idle" | "microphone" | "connecting" | "connected" | "closing" | "error";
 export type FeedStatus = "connecting" | "connected" | "reconnecting";
+const CLOSE_GRACE_MS = 20_000;
+const CLOSE_GRACE_EXPIRED = "20秒以内に終了応答がなかったため、ローカル音声接続を解放しました。最終利用量はサーバーのイベントを確認してください。";
 export interface Transcript {
   id: string;
   speaker: "user" | "assistant";
@@ -30,6 +37,8 @@ interface Resources {
   timeout: ReturnType<typeof setTimeout> | null;
   checkReady: (() => void) | null;
   startup: AbortController | null;
+  activity: AudioActivityMonitor | null;
+  established: boolean;
 }
 
 function microphoneError(error: unknown): string {
@@ -57,12 +66,15 @@ export function useLab() {
   const [busy, setBusy] = useState(false);
   const [mic, setMic] = useState<MediaStream | null>(null);
   const [remote, setRemote] = useState<MediaStream | null>(null);
+  const [audioContext, setAudioContext] = useState<AudioContext | null>(null);
+  const measurements = useRef<AudioMeasurementEvent[]>([]);
+  const getMeasurements = useCallback((): readonly AudioMeasurementEvent[] => measurements.current, []);
   const [micName, setMicName] = useState("未使用");
   const [transcripts, setTranscripts] = useState<Transcript[]>([]);
   const [localExpiresAt, setLocalExpiresAt] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const stateRef = useRef<BrowserState | null>(null);
-  const resources = useRef<Resources>({ peer: null, channel: null, mic: null, remote: null, timeout: null, checkReady: null, startup: null });
+  const resources = useRef<Resources>({ peer: null, channel: null, mic: null, remote: null, timeout: null, checkReady: null, startup: null, activity: null, established: false });
   const mounted = useRef(false);
   const generation = useRef(0);
   const locked = useRef(false);
@@ -91,11 +103,27 @@ export function useLab() {
     resources.current.checkReady?.();
   }, []);
 
-  const disposeMedia = useCallback(() => {
+  const muteMedia = useCallback(() => {
     const current = resources.current;
     current.checkReady = null;
+    for (const track of current.mic?.getTracks() ?? []) track.enabled = false;
+    for (const track of current.remote?.getTracks() ?? []) track.enabled = false;
     current.startup?.abort();
+    current.activity?.setActive(false);
     if (current.timeout !== null) clearTimeout(current.timeout);
+    current.timeout = null;
+    if (mounted.current) setRemote(null);
+  }, []);
+
+  const disposeMedia = useCallback(() => {
+    muteMedia();
+    const current = resources.current;
+    if (current.activity) {
+      void current.activity.dispose().catch((failure: unknown) => {
+        if (mounted.current) setError((previous) => `${previous ?? ""} 音声活動の検出を終了できませんでした。${errorMessage(failure)}`.trim());
+        else console.error("Voice Action Lab: audio activity cleanup failed.", failure);
+      });
+    }
     if (current.channel) {
       current.channel.onmessage = null;
       current.channel.onopen = null;
@@ -114,13 +142,14 @@ export function useLab() {
       track.stop();
     }
     for (const track of current.remote?.getTracks() ?? []) track.stop();
-    resources.current = { peer: null, channel: null, mic: null, remote: null, timeout: null, checkReady: null, startup: null };
+    resources.current = { peer: null, channel: null, mic: null, remote: null, timeout: null, checkReady: null, startup: null, activity: null, established: false };
     if (mounted.current) {
       setMic(null);
       setRemote(null);
+      setAudioContext(null);
       setLocalExpiresAt(null);
     }
-  }, []);
+  }, [muteMedia]);
 
   const end = useCallback((): Promise<void> => {
     if (stopping.current) return stopping.current;
@@ -128,17 +157,26 @@ export function useLab() {
     const pendingExchange = exchange.current;
     const pendingReady = readyExchange.current;
     const pendingSimulation = simulationStart.current;
+    const established = resources.current.established;
     const token = ++generation.current;
     locked.current = true;
-    disposeMedia();
+    if (established) muteMedia();
+    else disposeMedia();
     if (mounted.current) {
       setPhase("closing");
       setBusy(true);
     }
+    let graceExpired = false;
+    const graceTimer = established ? setTimeout(() => {
+      graceExpired = true;
+      disposeMedia();
+      if (mounted.current) setError((previous) => previous ? `${previous} ${CLOSE_GRACE_EXPIRED}` : CLOSE_GRACE_EXPIRED);
+      else console.error("Voice Action Lab:", CLOSE_GRACE_EXPIRED);
+    }, CLOSE_GRACE_MS) : null;
     const work = async () => {
       const failures: string[] = [];
       try {
-        applyState(await post("/api/stop", {}, isBrowserState));
+        applyState(await post("/api/stop", {}, isBrowserState, { keepalive: true }));
       } catch (failure) {
         failures.push(`緊急停止をサーバーで確認できませんでした。${errorMessage(failure)}`);
       }
@@ -162,18 +200,20 @@ export function useLab() {
           setNotice("シミュレーションの開始は完了しませんでした。停止状態を再確認します。");
         }
         try {
-          applyState(await post("/api/stop", {}, isBrowserState));
+          applyState(await post("/api/stop", {}, isBrowserState, { keepalive: true }));
         } catch (failure) {
           failures.push(`開始処理後の停止を確認できませんでした。${errorMessage(failure)}`);
         }
       }
       if (shouldCloseLive) {
         try {
-          applyState(await post("/api/session/close", {}, isBrowserState));
+          applyState(await post("/api/session/close", {}, isBrowserState, { keepalive: true }));
         } catch (failure) {
           failures.push(`セッションの終了を確認できませんでした。${errorMessage(failure)}`);
         }
       }
+      if (graceExpired) failures.push(CLOSE_GRACE_EXPIRED);
+      if (failures.length && !mounted.current) console.error("Voice Action Lab: server session cleanup failed.", failures.join(" "));
       if (generation.current === token) {
         liveAttempt.current = failures.length > 0 && shouldCloseLive;
         exchange.current = null;
@@ -187,31 +227,27 @@ export function useLab() {
         }
       }
     };
-    const result = work().finally(() => { stopping.current = null; });
+    const result = work().finally(() => {
+      if (graceTimer !== null) clearTimeout(graceTimer);
+      disposeMedia();
+      stopping.current = null;
+    });
     stopping.current = result;
     return result;
-  }, [applyState, disposeMedia]);
+  }, [applyState, disposeMedia, muteMedia]);
   endRef.current = end;
 
   useEffect(() => {
     mounted.current = true;
     return () => {
       mounted.current = false;
-      ++generation.current;
-      const needsClose = liveAttempt.current;
-      const pendingExchange = exchange.current;
-      const pendingReady = readyExchange.current;
-      disposeMedia();
-      if (needsClose) {
-        void (async () => {
-          if (pendingExchange) await Promise.allSettled([pendingExchange]);
-          if (pendingReady) await Promise.allSettled([pendingReady]);
-          try {
-            await post("/api/session/close", {}, isBrowserState, { keepalive: true });
-          } catch (failure) {
-            console.error("Voice Action Lab: server session cleanup failed.", failure);
-          }
-        })();
+      if (liveAttempt.current || stopping.current) {
+        void endRef.current().catch((failure: unknown) => {
+          console.error("Voice Action Lab: server session cleanup failed.", failure);
+        });
+      } else {
+        ++generation.current;
+        disposeMedia();
       }
     };
   }, [disposeMedia]);
@@ -283,13 +319,15 @@ export function useLab() {
         socket.onmessage = null;
         socket.onerror = null;
         socket.onclose = null;
-        socket.close();
+        const closingSocket = socket;
+        if (stopping.current && resources.current.established) void stopping.current.then(() => closingSocket.close(), () => closingSocket.close());
+        else closingSocket.close();
       }
     };
   }, [applyState, refreshKey]);
 
   useEffect(() => {
-    if (!state) return;
+    if (!state || state !== stateRef.current) return;
     if (liveAttempt.current && observedLiveSession.current && (phase === "connected" || phase === "connecting")
       && (state.session.transport === "disconnected" || state.session.transport === "error" || state.game.stopped)) {
       setNotice("サーバーが実行を終了しました。マイクと音声接続を閉じます。");
@@ -305,6 +343,7 @@ export function useLab() {
   const startSimulation = useCallback(async (mode: ExperimentMode) => {
     if (locked.current || !canStart) return;
     locked.current = true;
+    measurements.current = [];
     const token = ++generation.current;
     setBusy(true);
     setError(null);
@@ -334,17 +373,35 @@ export function useLab() {
     liveAttempt.current = true;
     observedLiveSession.current = false;
     const token = ++generation.current;
+    const runStartedAtMs = performance.now();
+    const measurementLog: AudioMeasurementEvent[] = [];
+    measurements.current = measurementLog;
     const current = () => mounted.current && generation.current === token;
     setBusy(true);
     setError(null);
     setNotice(null);
     setTranscripts([]);
     setPhase("microphone");
+    const fail = (message: string) => {
+      if (!current()) return;
+      setError(message);
+      void endRef.current();
+    };
     try {
       if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
         throw new Error("実音声には HTTPS（または localhost）と、マイクに対応したブラウザーが必要です。");
       }
       if (typeof RTCPeerConnection === "undefined") throw new Error("このブラウザーは WebRTC に対応していません。");
+      const activity = createAudioActivityMonitor(runStartedAtMs, fail, (event) => {
+        if (measurements.current !== measurementLog) return;
+        if (measurementLog.length >= MAX_MEASUREMENT_RECORDS) {
+          fail("計測メタデータの保存上限に達したため停止します。");
+          return;
+        }
+        measurementLog.push(event);
+      }, measurementModuleUrl, (message) => { if (current()) setNotice(message); });
+      resources.current.activity = activity;
+      setAudioContext(activity.context);
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: micDeviceId.current ? { deviceId: { exact: micDeviceId.current } } : true,
         video: false,
@@ -360,6 +417,9 @@ export function useLab() {
       }
       stream.getAudioTracks().forEach((captureTrack) => { captureTrack.enabled = false; });
       resources.current.mic = stream;
+      await activity.ready;
+      if (!current()) return;
+      activity.setInput(stream);
       micDeviceId.current = track.getSettings().deviceId ?? micDeviceId.current;
       setMicName(track.label || "許可済みのマイク");
       setMic(stream);
@@ -372,18 +432,20 @@ export function useLab() {
       resources.current.peer = peer;
       resources.current.remote = remoteStream;
       setRemote(remoteStream);
-      const fail = (message: string) => {
-        if (!current()) return;
-        setError(message);
-        void endRef.current();
-      };
       track.onended = () => fail("マイクが切断されました。音声セッションを終了します。");
       peer.ontrack = (event) => {
         if (!current()) { event.track.stop(); return; }
         if (!remoteStream.getTracks().some((entry) => entry.id === event.track.id)) {
           remoteStream.addTrack(event.track);
         }
-        setRemote(new MediaStream(remoteStream.getTracks()));
+        const received = new MediaStream(remoteStream.getTracks());
+        try {
+          activity.setOutput(received);
+        } catch (failure) {
+          fail(`受信音声の活動を確認できませんでした。${errorMessage(failure)}`);
+          return;
+        }
+        setRemote(received);
       };
       peer.addTrack(track, stream);
       const channel = peer.createDataChannel("oai-events");
@@ -395,6 +457,8 @@ export function useLab() {
           && liveSessionReady(stateRef.current, mode)) {
           if (resources.current.timeout !== null) clearTimeout(resources.current.timeout);
           resources.current.timeout = null;
+          activity.setActive(true);
+          if (!current()) return;
           track.enabled = true;
           locked.current = false;
           setBusy(false);
@@ -402,6 +466,7 @@ export function useLab() {
           setPhase("connected");
         } else {
           track.enabled = false;
+          activity.setActive(false);
         }
       };
       resources.current.checkReady = reportReady;
@@ -411,6 +476,7 @@ export function useLab() {
           fail("実音声の接続が終了または失敗しました。シミュレーションには切り替えません。");
         } else if (peer.connectionState === "disconnected") {
           track.enabled = false;
+          activity.setActive(false);
           setPhase("connecting");
           setNotice("音声接続が中断しています。再接続を待っています。");
           if (sidebandAttached && resources.current.timeout === null) {
@@ -502,6 +568,7 @@ export function useLab() {
         throw new Error("信頼済み音声接続の準備中に接続状態が変わりました。マイクは送信していません。");
       }
       sidebandAttached = true;
+      resources.current.established = true;
       reportReady();
     } catch (failure) {
       if (!current()) return;
@@ -541,7 +608,7 @@ export function useLab() {
   }, []);
 
   return {
-    state, config, phase, feed, error, feedError, notice, busy, mic, remote, micName,
+    state, config, phase, feed, error, feedError, notice, busy, mic, remote, micName, audioContext, getMeasurements,
     transcripts, localExpiresAt, canStart, startSimulation, connectLive, end, sendCommand, refresh,
   };
 }

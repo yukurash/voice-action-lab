@@ -4,6 +4,7 @@ import type { BrowserState, CargoColor, Destination, ExperimentMode, LabEvent, O
 import { errorMessage, idleWarning } from "./api.ts";
 import { useLab } from "./useLab.ts";
 import { useLocalRecording } from "./useLocalRecording.ts";
+import { LocalSessionPanel } from "./LocalSessionPanel.tsx";
 
 const modes: { id: ExperimentMode; letter: string; title: string; description: string }[] = [
   { id: "voice-only", letter: "A", title: "音声だけを止める", description: "割り込み時、操作の取消は適用しない" },
@@ -55,7 +56,7 @@ function eventDescription(event: LabEvent): string {
     .join(" · ");
 }
 
-function RemoteAudio({ stream, connected }: { stream: MediaStream | null; connected: boolean }) {
+function RemoteAudio({ stream, connected, stopping }: { stream: MediaStream | null; connected: boolean; stopping: boolean }) {
   const ref = useRef<HTMLAudioElement>(null);
   const [playbackError, setPlaybackError] = useState<string | null>(null);
   const [playing, setPlaying] = useState(false);
@@ -90,12 +91,12 @@ function RemoteAudio({ stream, connected }: { stream: MediaStream | null; connec
   };
 
   return <div className="audio-status">
-    <audio ref={ref} autoPlay playsInline
+    <audio ref={ref} autoPlay playsInline muted={stopping}
       onPlaying={() => setPlaying(true)}
       onPause={() => setPlaying(false)}
       onError={() => setPlaybackError("受信音声の再生に失敗しました。接続とブラウザーの音声設定を確認してください。")} />
-    <span className={`status-dot ${playing ? "green" : ""}`} />
-    <span>{playing ? "受信音声の再生準備完了" : connected ? "受信音声を待機" : "音声出力は未接続"}</span>
+    <span className={`status-dot ${playing && !stopping ? "green" : ""}`} />
+    <span>{stopping ? "音声出力をミュート済み" : playing ? "受信音声の再生準備完了" : connected ? "受信音声を待機" : "音声出力は未接続"}</span>
     {playbackError && <div className="inline-error" role="alert">
       <p>{playbackError}</p>
       <button className="button small" onClick={() => void resume()}><Glyph name="sound" size={15} />音声を再生</button>
@@ -203,7 +204,7 @@ export function App() {
   const [now, setNow] = useState(Date.now);
   const [localDeadline, setLocalDeadline] = useState<number | null>(null);
   const expiryStopped = useRef<string | null>(null);
-  const recording = useLocalRecording(lab.mic, lab.remote);
+  const recording = useLocalRecording(lab.mic, lab.remote, lab.audioContext);
   const state = lab.state;
   const serverActive = state?.session.transport === "connected" || state?.session.transport === "connecting" || state?.session.transport === "closing";
   const liveLocal = lab.phase === "connected" || lab.phase === "connecting" || lab.phase === "microphone";
@@ -300,8 +301,9 @@ export function App() {
           </div>
           <div className="connection-status">
             <div><Glyph name="mic" size={16} /><span>マイク</span><strong title={lab.micName}>{lab.micName}</strong></div>
-            {lab.mic && lab.phase !== "connected" && <div>接続準備中・マイク送信停止中</div>}
-            <RemoteAudio stream={lab.remote} connected={lab.phase === "connected"} />
+            {lab.mic && lab.phase !== "connected" && <div>{lab.phase === "closing" ? "切断処理中・マイク送信停止中" : "接続準備中・マイク送信停止中"}</div>}
+            <RemoteAudio stream={lab.remote} connected={lab.phase === "connected"} stopping={lab.phase === "closing"} />
+            {lab.phase === "connected" && <div>入力・受信の活動通知は時刻のみ（音声・字幕は含みません）</div>}
             <div><span className={`status-dot ${lab.feed === "connected" && !lab.feedError ? "green" : ""}`} /><span>状態ストリーム</span><strong>{lab.feed === "connected" && !lab.feedError ? "接続済み" : "更新待ち"}</strong></div>
           </div>
           <p className="session-message">{state?.session.message || "A を停止・切断してから B を開始してください。"}</p>
@@ -309,7 +311,7 @@ export function App() {
 
         <section className="panel command-panel" aria-labelledby="command-heading">
           <div className="section-heading"><h2 id="command-heading">試す指示</h2><span className="eyebrow">TRY SAYING</span></div>
-          <div className="prompt-list"><div><span>01</span><p>「赤い箱を右に運んで」</p></div><div><span>02</span><p>途中で「待って、青い箱を左に」</p></div><div><span>03</span><p>音声・取消・確定の違いを確認</p></div></div>
+          <div className="prompt-list"><div><span>01</span><p>「赤い箱を右に運んで」</p></div><div><span>02</span><p>途中で「待って、赤じゃなくて青を右に」</p></div><div><span>03</span><p>音声・取消・確定の違いを確認</p></div></div>
           <details className="manual-controls" open={simulationActive}>
             <summary>手動操作 <span>シミュレーション専用</span></summary>
             <fieldset disabled={!canCommand}><legend className="sr-only">シミュレーションの指示</legend>
@@ -328,6 +330,7 @@ export function App() {
 
         <Timeline state={state} transcripts={lab.transcripts} />
         <Operations state={state} />
+        <LocalSessionPanel state={state} active={active} getMeasurements={lab.getMeasurements} />
 
         <section className="panel recording-panel" aria-labelledby="recording-heading">
           <div className="recording-title"><h2 id="recording-heading"><span className={`status-dot ${recording.recording ? "red-dot" : ""}`} />任意のローカル録音</h2><span className="local-only">LOCAL ONLY</span></div>

@@ -168,7 +168,9 @@ through the private network; it is never returned to the browser.
   application route, not a Blob URL.
 - `GET /api/exports/:runId`: owner-authenticated JSON attachment. The persisted
   owner is checked even when a different user owns the currently active run.
-- `DELETE /api/exports/:runId`: owner and Origin required; body omitted or `{}`.
+- `DELETE /api/exports/:runId`: owner and Origin required. Send `{}` with
+  `Content-Type: application/json`; bodyless DELETE is accepted directly by the
+  server but can be rejected by the deployed browser/proxy path.
   Returns **200** `{runId, deleted:true}`. Azure soft-delete/version retention may
   retain recoverable copies according to infrastructure policy.
 

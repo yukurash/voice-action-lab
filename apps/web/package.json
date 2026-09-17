@@ -5,9 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "preview": "vite preview",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
-    "test": "node --test src/api.test.ts src/webrtc.test.ts",
+    "test": "node --test src/api.test.ts src/webrtc.test.ts src/audioActivity.test.ts src/pcmWindow.test.ts src/localSession.test.ts",
     "test:browser": "playwright test --config playwright.config.ts"
   },
   "dependencies": {
