@@ -125,6 +125,10 @@ rather than changing GitHub to a weaker subject format.
 If EasyAuth accepts a login but the API rejects its principal schema, the server
 logs only known field names, shape flags, and a bounded provider category. It
 does not log the principal, claim values, authorization headers, or tokens.
+Container Apps can use `Bearer` or `AuthenticationTypes.Federation` as the
+identity's `auth_typ`; that field is not always the provider name. These formats
+require the trusted `X-MS-CLIENT-PRINCIPAL-IDP: aad` header, and the tenant and
+owner object-ID checks still apply. The legacy `auth_typ: aad` format is retained.
 
 The Entra login credential has the tenant's permitted lifetime and must be
 rotated before expiry. Model and storage data access use managed identity, not
