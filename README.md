@@ -17,6 +17,21 @@ Simulated results must never be presented as live-service measurements.
 - Separate observation of speech, requested actions, and committed movement.
 - An authenticated, owner-only Azure deployment.
 
+## Action engine
+
+[GameEngine](packages/game-engine/index.ts) has no internal timers. The host
+registers each delegation and calls `tick()` to commit at most one movement
+step. Every clock value and optional creation offset uses the same monotonic,
+run-relative time basis.
+
+In `voice-only`, cancellation is observed without removing pending operations.
+In `cancel-actions`, cancellation invalidates the prior epoch and cancels
+uncommitted work. Replacement performs cancellation and enqueues its new action
+atomically. Already committed positions are never rolled back. Call IDs are
+deduplicated, conflicting retries are rejected, and terminal stop cannot be
+reversed by late results. Exact retries return historical receipts, not a new
+execution or a claim about the operation's current state.
+
 ## Public repository boundary
 
 This repository is for application code, tests, infrastructure templates, and
