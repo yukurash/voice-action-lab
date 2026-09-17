@@ -74,6 +74,13 @@ and returns only `{status:"ok"}`.
 - `GET /api/config`: `{liveAvailable, reason}`. Configured availability is not proof
   that the Azure account, deployment, or quota will accept a session.
 - `GET /api/state` and read-only `WS /api/events`: `BrowserState`.
+- `GET /api/experiment-config`: `{schemaVersion:1, settings, closeTimeoutMs, protocolSha256}`.
+  `settings` is identical to the private export's settings. The lowercase SHA-256
+  hashes the UTF-8 `JSON.stringify(sessionConfiguration(liveModel, backendModel))`
+  actually used for session creation. It contains neither mode nor dynamic IDs.
+  Use this owner-only, non-mutating route to pin and check deployed configuration
+  before sending trial audio. It exposes no endpoint, identity, credential, or
+  raw prompt. Deployment/model versions must still be recorded separately.
 - `POST /api/simulation/start`: `{mode}` → state. Mode is `voice-only` or `cancel-actions`.
 - `POST /api/command`: a strict `GameCommand` → `{result,state}`; simulation only.
 - `POST /api/session`: `{mode,sdp}` → `{sdp,expiresAt}`. The server reserves the
