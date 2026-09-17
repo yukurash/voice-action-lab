@@ -32,14 +32,31 @@ jobs:
       - run: npm ci
       - run: npm run verify
 
+  infrastructure:
+    name: Bicep compilation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Compile infrastructure without Azure credentials
+        shell: pwsh
+        run: |
+          foreach ($template in Get-ChildItem infra -Filter *.bicep) {
+            az bicep build --file $template.FullName --outfile (Join-Path $env:RUNNER_TEMP "$($template.BaseName).json")
+            if ($LASTEXITCODE -ne 0) { throw "Bicep failed: $($template.Name)" }
+          }
+
   ci:
     name: ci
     if: ${{ always() }}
-    needs: checks
+    needs: [checks, infrastructure]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
       - name: Require every platform check to succeed
         env:
           CHECK_RESULT: ${{ needs.checks.result }}
-        run: test "$CHECK_RESULT" = success
+          INFRA_RESULT: ${{ needs.infrastructure.result }}
+        run: test "$CHECK_RESULT" = success && test "$INFRA_RESULT" = success
