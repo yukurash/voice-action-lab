@@ -20,6 +20,13 @@ Subsequent releases must verify drain through the container operator channel.
 Never give the publishing identity access to the owner's browser API as a
 shortcut around deployment coordination.
 
+The template intentionally returns HTTP 401 for unauthenticated application
+requests. For interactive sign-in, open
+`https://<app-host>/.auth/login/aad?post_login_redirect_uri=/` first. That
+platform-owned route redirects to Entra and returns to the app after the owner's
+login. A direct bearer-token API test does not replace this interactive login
+step, and no publishing identity is added to the browser-owner allowlist.
+
 Freeze automatic deployment during a measurement batch and pin its source,
 digest, model versions, and configuration separately. A successful image build
 alone does not prove a healthy or authenticated deployment.
