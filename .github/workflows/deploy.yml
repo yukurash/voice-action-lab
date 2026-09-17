@@ -90,11 +90,27 @@ jobs:
     if: vars.AZURE_DEPLOY_ENABLED == 'true'
     runs-on: ubuntu-latest
     environment: production
-    timeout-minutes: 15
+    timeout-minutes: 45
     permissions:
       contents: read
       id-token: write
     steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.build.outputs.source }}
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - name: Reject superseded automatic releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE: ${{ needs.build.outputs.source }}
+        run: |
+          CURRENT="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')"
+          test "$SOURCE" = "$CURRENT"
       - uses: Azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
         env:
           AZURE_CORE_OUTPUT: json
@@ -102,17 +118,16 @@ jobs:
           client-id: ${{ vars.AZURE_PUBLISHER_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      - name: Deploy the verified digest
+      - name: Drain, deploy, verify, and recover safely
         env:
-          DIGEST: ${{ needs.build.outputs.digest }}
-          REGISTRY: ${{ vars.AZURE_REGISTRY_NAME }}
-          RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
-          APP_NAME: ${{ vars.AZURE_CONTAINER_APP }}
-          SUBSCRIPTION: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          RELEASE_DIGEST: ${{ needs.build.outputs.digest }}
+          RELEASE_SOURCE: ${{ needs.build.outputs.source }}
+          AZURE_REGISTRY_NAME: ${{ vars.AZURE_REGISTRY_NAME }}
+          AZURE_RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+          AZURE_CONTAINER_APP: ${{ vars.AZURE_CONTAINER_APP }}
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
         run: |
-          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
-          IMAGE="$REGISTRY.azurecr.io/voice-action-lab@$DIGEST"
-          az containerapp update --subscription "$SUBSCRIPTION" --resource-group "$RESOURCE_GROUP" --name "$APP_NAME" --image "$IMAGE" --output none
-          ACTUAL="$(az containerapp show --subscription "$SUBSCRIPTION" --resource-group "$RESOURCE_GROUP" --name "$APP_NAME" --query properties.template.containers[0].image --output tsv)"
-          test "$ACTUAL" = "$IMAGE"
-          echo "Deployed: $IMAGE" >> "$GITHUB_STEP_SUMMARY"
+          node scripts/deploy-verified.ts
+          echo "Verified source: $RELEASE_SOURCE" >> "$GITHUB_STEP_SUMMARY"
+          echo "Healthy deployment: $RELEASE_DIGEST" >> "$GITHUB_STEP_SUMMARY"
