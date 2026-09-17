@@ -105,6 +105,10 @@ GitHub subjects can include immutable owner and repository IDs; a legacy
 name-only trust entry will not match those claims. Preserve the stronger claim
 rather than changing GitHub to a weaker subject format.
 
+If EasyAuth accepts a login but the API rejects its principal schema, the server
+logs only known field names, shape flags, and a bounded provider category. It
+does not log the principal, claim values, authorization headers, or tokens.
+
 The Entra login credential has the tenant's permitted lifetime and must be
 rotated before expiry. Model and storage data access use managed identity, not
 that login credential.
