@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import Fastify from "fastify";
 import type { FastifyInstance, FastifyRequest } from "fastify";
@@ -13,10 +13,10 @@ import { validateConfig } from "./config.ts";
 import type { ServerConfig } from "./config.ts";
 import { AzureLiveGateway, GatewayError } from "./gateway.ts";
 import type { CloseResult, LiveConnection, LiveGateway } from "./gateway.ts";
-import { completedTool, serviceId } from "./protocol.ts";
+import { completedTool, serviceId, sessionConfiguration } from "./protocol.ts";
 import { createCredential } from "./credentials.ts";
 import { AzureBlobExportStore } from "./export-store.ts";
-import { buildRunExport, exportRunId, parseRunExport } from "./exports.ts";
+import { buildRunExport, buildRunSettings, exportRunId, parseRunExport } from "./exports.ts";
 import type { PrivateExportStore } from "./exports.ts";
 import { MaintenanceGate, MaintenanceDrainingError, startMaintenanceListener } from "../../packages/deployment/index.ts";
 import type { MaintenanceListener } from "../../packages/deployment/index.ts";
@@ -377,6 +377,13 @@ export async function buildApp(config: ServerConfig, dependencies: AppDependenci
       : config.liveEnabled ? "Live configured; account and session connection are verified on connect." : "Live is disabled by server configuration.",
   }));
   app.get("/api/state", async (request) => { ensureOwner(request); return state(); });
+  app.get("/api/experiment-config", async () => ({
+    schemaVersion: 1,
+    settings: buildRunSettings(config),
+    closeTimeoutMs: config.closeTimeoutMs,
+    protocolSha256: createHash("sha256")
+      .update(JSON.stringify(sessionConfiguration(config.liveModel, config.backendModel))).digest("hex"),
+  }));
   app.get("/api/events", { websocket: true, preValidation: async (request) => { ensureOwner(request); } }, (socket, request) => {
     const socketOwner = owner(request);
     sockets.set(socket, socketOwner);

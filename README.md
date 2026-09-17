@@ -8,8 +8,9 @@ application-level cancellation of pending actions.
 The browser application and server are implemented. A real-service smoke test
 has exercised the UI connection button, synthetic Japanese microphone input,
 GPT-Live delegation, backend tool calls, paced game movement, incoming audio,
-and normal shutdown. The owner-only cloud app and formal A/B experiment are
-still being prepared.
+and normal shutdown. The owner-only cloud app is deployed; private run
+export/download/delete is verified. The formal A/B experiment is still being
+prepared.
 Simulated results must never be presented as live-service measurements.
 
 ## Intended scope
@@ -129,10 +130,16 @@ Container Apps can use `Bearer` or `AuthenticationTypes.Federation` as the
 identity's `auth_typ`; that field is not always the provider name. These formats
 require the trusted `X-MS-CLIENT-PRINCIPAL-IDP: aad` header, and the tenant and
 owner object-ID checks still apply. The legacy `auth_typ: aad` format is retained.
+Automated clients use a scoped Entra bearer token containing `tid` and `oid`.
+A compact client-directed sign-in token can omit these claims and is therefore
+rejected; an authenticated display name or opaque session ID is not an owner
+authorization substitute.
 
 The Entra login credential has the tenant's permitted lifetime and must be
 rotated before expiry. Model and storage data access use managed identity, not
 that login credential.
+See [deployment and credential lifecycle](infra/README.md) for bootstrap
+boundaries, private parameter handling, and overlapping login-secret rotation.
 
 WebRTC setup must gather ICE candidates and apply the SDP answer before the
 server attaches the Live sideband. Attaching before the browser connects can

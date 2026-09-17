@@ -172,17 +172,22 @@ export function parseRunExport(value: unknown, expectedRunId: string): RunExport
   };
 }
 
+export function buildRunSettings(config: ServerConfig): RunExport["settings"] {
+  return {
+    liveModel: config.liveModel, backendModel: config.backendModel,
+    stepIntervalMs: config.stepIntervalMs, tickMs: config.tickMs,
+    sessionLimitMs: config.sessionLimitMs, idleLimitMs: config.idleLimitMs,
+    sourceOffsetsSynchronized: false,
+    ...(config.sourceCommit ? { sourceCommit: config.sourceCommit } : {}),
+  };
+}
+
 export function buildRunExport(state: BrowserState, config: ServerConfig, closedAt: string, exportedAt: string): RunExport {
   const runId = exportRunId(state.game.runId);
   const document = parseRunExport({
     schemaVersion: 1, runId, source: state.session.source, closedAt, exportedAt,
     game: state.game, session: { transport: state.session.transport },
-    settings: {
-      liveModel: config.liveModel, backendModel: config.backendModel,
-      stepIntervalMs: config.stepIntervalMs, tickMs: config.tickMs,
-      sessionLimitMs: config.sessionLimitMs, idleLimitMs: config.idleLimitMs,
-      ...(config.sourceCommit ? { sourceCommit: config.sourceCommit } : {}),
-    },
+    settings: buildRunSettings(config),
   }, runId);
   serializeRunExport(document);
   return document;
