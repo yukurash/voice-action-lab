@@ -155,7 +155,7 @@ test("output guard returns canonical external paths, supports new ancestors, and
   await assert.rejects(stat(output), { code: "ENOENT" });
   assert.equal(await resolveExternalOutputPath(external, repository), await realpath(external));
   const sibling = join(base, "public-repo-copy", "out.json");
-  assert.equal(await resolveExternalOutputPath(sibling, repository), sibling);
+  assert.equal(await resolveExternalOutputPath(sibling, repository), join(await realpath(base), "public-repo-copy", "out.json"));
 });
 
 test("output guard rejects the repository, all descendants, and normalized traversal into it", async (t) => {

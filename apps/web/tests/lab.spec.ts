@@ -268,15 +268,21 @@ test("emergency stop invalidates a late microphone permission result", async ({ 
   expect(mock.calls.some((entry) => entry.path === "/api/session" || entry.path === "/api/simulation/start")).toBe(false);
 });
 
-test("a server expiry stops the run and future idle warnings are displayed", async ({ page }) => {
+test("a server expiry stops the run after displaying the session.message idle warning", async ({ page }) => {
+  await page.clock.install({ time: new Date("2030-01-01T00:00:00Z") });
+  await page.clock.pauseAt(new Date("2030-01-01T00:00:01Z"));
   const mock = await harness(page);
   await page.getByRole("button", { name: "シミュレーションを開始", exact: true }).click();
+  await expect(page.getByRole("button", { name: "移動", exact: true })).toBeEnabled();
   const next = mock.snapshot();
-  next.session.expiresAt = new Date(Date.now() + 500).toISOString();
-  const warning = { ...next, session: { ...next.session, idleWarning: "Synthetic idle warning" } };
-  mock.publish(warning);
+  next.session.expiresAt = "2030-01-01T00:00:02Z";
+  next.session.message = "Synthetic idle warning";
+  mock.publish(next);
   await expect(page.getByText("Synthetic idle warning", { exact: true })).toBeVisible();
+  expect(mock.calls.some((entry) => entry.path === "/api/stop")).toBe(false);
+  await page.clock.fastForward(1_001);
   await expect.poll(() => mock.calls.some((entry) => entry.path === "/api/stop")).toBe(true);
+  await expect(page.getByRole("button", { name: "シミュレーションを開始", exact: true })).toBeEnabled();
 });
 
 test("small viewport has no horizontal overflow and reduced motion removes interpolation", async ({ page }) => {
