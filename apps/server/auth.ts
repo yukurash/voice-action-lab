@@ -29,6 +29,18 @@ export function ownerFromRequest(request: FastifyRequest, config: ServerConfig):
     throw new HttpError(401, "invalid_principal");
   }
   if (!principal || principal.auth_typ !== "aad" || !Array.isArray(principal.claims)) {
+    console.warn(JSON.stringify({
+      event: "easyauth_principal_schema_rejected",
+      object: principal !== null,
+      fields: Object.keys(principal ?? {}).filter((key) => [
+        "auth_typ", "claims", "name_typ", "role_typ", "identityProvider", "identity_provider",
+        "authenticationType", "user_claims", "Claims",
+      ].includes(key)),
+      authType: ["aad", "Federation", "AuthenticationTypes.Federation", "Bearer", "azureactivedirectory"]
+        .find((value) => principal?.auth_typ === value) ?? "unrecognized",
+      claimsArray: Array.isArray(principal?.claims),
+      providerHeaderIsAad: request.headers["x-ms-client-principal-idp"] === "aad",
+    }));
     throw new HttpError(401, "invalid_principal");
   }
   const claims = principal.claims.map(object);
