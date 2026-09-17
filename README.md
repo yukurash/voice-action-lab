@@ -34,6 +34,23 @@ deduplicated, conflicting retries are rejected, and terminal stop cannot be
 reversed by late results. Exact retries return historical receipts, not a new
 execution or a claim about the operation's current state.
 
+## Experiment primitives
+
+[Experiment utilities](packages/experiments/index.ts) build a seeded schedule of
+five scenarios, ten repetitions, and both modes: 100 planned slots. Adjacent
+pairs are counterbalanced with five A-first and five B-first pairs per scenario.
+Reports retain failed and not-run slots instead of dropping them.
+
+Action metrics consume the complete event history and distinguish ignored
+intent, accepted cancellation, pending targets, and steps after that acceptance.
+Emergency cleanup is not semantic cancellation. Exact idempotent replays have
+no distinct engine event and are reported as unobservable, not as zero.
+These utilities do not infer speech timing from action or transcript events.
+
+The output-path guard requires an absolute repository-external path and checks
+existing ancestors and symlinks. It does not create files or provide a filesystem
+concurrency lock. Actual run data must remain outside this checkout.
+
 ## Public repository boundary
 
 This repository is for application code, tests, infrastructure templates, and
