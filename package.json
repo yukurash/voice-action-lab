@@ -12,6 +12,7 @@
     "build": "npm run build:server && npm run build:web",
     "build:server": "tsc",
     "build:web": "npm run build --workspace @voice-action-lab/web",
+    "build:demo": "npm run build:demo --workspace @voice-action-lab/web",
     "typecheck": "tsc --noEmit && npm run typecheck --workspace @voice-action-lab/web",
     "lint": "eslint .",
     "test": "npm run build:server && node --test dist/tests/*.test.js && npm run test --workspace @voice-action-lab/web",
@@ -19,7 +20,7 @@
     "start": "npm run start --workspace @voice-action-lab/server",
     "check:public": "node scripts/check-public.ts",
     "check:identity": "node scripts/check-identity.ts",
-    "verify": "npm run check:public && npm run typecheck && npm run lint && npm test && npm run build:web"
+    "verify": "npm run check:public && npm run typecheck && npm run lint && npm test && npm run build:web && npm run build:demo"
   },
   "devDependencies": {
     "@azure/identity": "4.13.3",

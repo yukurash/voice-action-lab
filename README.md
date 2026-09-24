@@ -3,14 +3,51 @@
 An experimental TypeScript project for comparing voice interruption with
 application-level cancellation of pending actions.
 
+## Public, no-Azure demo
+
+**[Open the interactive demo](https://yukurash.github.io/voice-action-lab/)**
+
+This GitHub Pages site reuses the experiment's cargo board, operation queue,
+timeline and action engine. It runs entirely in the browser and is explicitly
+labelled as an explanatory simulation, **not a recording or live experiment**.
+Buttons stand in for already-interpreted commands; speech recognition, model
+reasoning and audio interruption are not simulated.
+
+Try **red to the right**, advance two steps, then **replace with blue**.
+Mode A continues the red operation; mode B cancels its remaining steps before
+moving blue. Committed positions are not rolled back. Manual steps advance a
+synthetic clock by three seconds; optional automatic progression advances one
+step every three seconds. Emergency stop affects both modes; changing modes or
+resetting starts a fresh, empty demo.
+
+The public bundle contains no microphone/recording code, Azure client, backend
+connection, exported run data, audio, transcripts or article content. State
+exists only in the current tab's memory. A restrictive CSP disables network
+connections and media. The authenticated cloud application is a separate build;
+its default behavior and access restrictions are unchanged.
+
+```powershell
+npm run build:demo
+npm run preview:demo --workspace @voice-action-lab/web
+# Open http://127.0.0.1:5176/voice-action-lab/
+npm run test:demo --workspace @voice-action-lab/web
+```
+
+`vite.demo.config.ts` uses a separate entry point, excludes the normal public
+directory and rejects live-client/server modules in the runtime dependency
+graph. Only `apps/web/dist/demo` is published by the Pages workflow after the
+main-branch CI succeeds. The built-site tests use the actual project subpath,
+block microphone/audio/WebRTC/backend access, and verify both cancellation
+policies, reset/stop, pacing, offline operation and a mobile viewport.
+
 ## Status
 
 The browser application and server are implemented. A real-service smoke test
 has exercised the UI connection button, synthetic Japanese microphone input,
 GPT-Live delegation, backend tool calls, paced game movement, incoming audio,
 and normal shutdown. The owner-only cloud app is deployed; private run
-export/download/delete is verified. The formal A/B experiment is still being
-prepared.
+export/download/delete is verified. Formal experiment data stays private and
+is not shipped with the public demo.
 Simulated results must never be presented as live-service measurements.
 
 ## Intended scope
