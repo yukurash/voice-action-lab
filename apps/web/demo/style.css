@@ -1,0 +1,22 @@
+.public-demo .intro-copy { font-size: 13px; }
+.public-demo .source-banner { line-height: 1.8; }
+.demo-source { font-size: 13px; }
+.demo-controls { padding: 4px 20px 20px; display: grid; gap: 14px; }
+.demo-controls fieldset { display: grid; gap: 10px; }
+.demo-controls legend { font-size: 12px; margin-bottom: 12px; }
+.demo-controls .button { width: 100%; justify-content: center; min-height: 44px; }
+.demo-auto { font-size: 12px; display: flex; align-items: center; gap: 8px; }
+.demo-auto input { width: 18px; height: 18px; }
+.demo-guide ol { font-size: 13px; line-height: 1.9; padding: 0 28px 12px 40px; margin: 0; }
+.demo-notice { margin: 0 20px 20px; padding: 14px; background: #eaf0e6; border-radius: 8px; font-size: 13px; line-height: 1.8; }
+.demo-footer { padding: 28px 0 40px; font-size: 12px; color: var(--muted); line-height: 1.9; }
+.public-demo .event-copy, .public-demo .operation-copy { overflow-wrap: anywhere; }
+@media (max-width: 600px) {
+  .public-demo .topbar { height: auto; min-height: 82px; flex-wrap: wrap; padding: 12px 0; }
+  .public-demo .brand { font-size: 16px; }
+  .public-demo .topbar-right { gap: 12px; }
+  .public-demo .board-caption { flex-wrap: wrap; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .public-demo *, .public-demo *::before, .public-demo *::after { animation: none !important; transition: none !important; }
+}

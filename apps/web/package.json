@@ -7,9 +7,12 @@
     "dev": "vite",
     "preview": "vite preview",
     "build": "tsc --noEmit && vite build",
+    "build:demo": "tsc --noEmit && vite build --config vite.demo.config.ts",
+    "preview:demo": "vite preview --config vite.demo.config.ts",
     "typecheck": "tsc --noEmit",
-    "test": "node --test src/api.test.ts src/webrtc.test.ts src/audioActivity.test.ts src/pcmWindow.test.ts src/localSession.test.ts",
-    "test:browser": "playwright test --config playwright.config.ts"
+    "test": "node --test src/api.test.ts src/webrtc.test.ts src/audioActivity.test.ts src/pcmWindow.test.ts src/localSession.test.ts demo/localGame.test.ts",
+    "test:browser": "playwright test --config playwright.config.ts",
+    "test:demo": "playwright test --config playwright.demo.config.ts"
   },
   "dependencies": {
     "react": "19.3.0",
